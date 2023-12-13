@@ -1,0 +1,7 @@
+__pycache__
+tmp
+build
+dist
+*.egg-info
+test_outputs
+.coverage
