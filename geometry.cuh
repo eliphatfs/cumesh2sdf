@@ -57,7 +57,7 @@ __forceinline__ __device__ float point_to_tri_dist_sqr(float3 v1, float3 v2, flo
     const float u = (dot11 * dot02 - dot01 * dot12) * invDenom;
     const float v = (dot00 * dot12 - dot01 * dot02) * invDenom;
     const float uc = clamp(u, 0.0f, 1.0f);
-    const float vc = clamp(v, 0.0f, 1.0f - u);
+    const float vc = clamp(v, 0.0f, 1.0f - uc);
 
     const float3 prc = v1 + uc * e0 + vc * e1;
     // printf("%.3f %.3f; %.3f %.3f %.3f; %.3f %.3f %.3f\n", uc, vc, proj.x, proj.y, proj.z, prc.x, prc.y, prc.z);
