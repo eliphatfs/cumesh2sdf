@@ -40,7 +40,7 @@ __global__ void volume_scan_kernel(const float * tris, float * grid, const int N
 
 template<bool probe>
 __global__ void rasterize_layer_kernel(
-    const float3 * tris, const uint * idx, const uint * grid, const uint S, const int M, const int N, const int expansion,
+    const float3 * tris, const uint * idx, const uint * grid, const uint S, const int M, const int N, const float band,
     uint * tempBlockOffset, uint * totalSize, uint * outIdx, uint * outGrid
 ) {
     // idx [M] index into tris
@@ -71,7 +71,8 @@ __global__ void rasterize_layer_kernel(
     const uint3 nxyz = unpack_id(gid) * S + make_uint3(i, j, k);
     const float3 fxyz = (make_float3(nxyz.x, nxyz.y, nxyz.z) + 0.5f) / (float)N;
     
-    const bool intersect = point_to_tri_dist_sqr(v1, v2, v3, fxyz) < 0.75 / (N * N) * (expansion * expansion);
+    const float thresh = 0.87 / N + band;
+    const bool intersect = point_to_tri_dist_sqr(v1, v2, v3, fxyz) < thresh * thresh;
     
     if (intersect)
     {
@@ -101,6 +102,13 @@ __device__ __forceinline__ static float atomicMin(float* address, float val)
         old = atomicCAS(address_as_i, assumed, __float_as_int(fminf(val, __int_as_float(assumed))));
     } while (assumed != old);
     return __int_as_float(old);
+}
+
+__global__ void rasterize_fill_kernel(const float val, const int L, float * outGridDist)
+{
+    const int g = blockIdx.x * blockDim.x + threadIdx.x;
+    if (g >= L) return;
+    outGridDist[g] = val;
 }
 
 __global__ void rasterize_reduce_kernel(
@@ -133,7 +141,7 @@ void volume_scan_cuda(const float * tris, float * grid, const int N)
     volume_scan_kernel<<<dimBlock, dimGrid>>>(tris, grid, N);
 }
 
-float * rasterize_tris(const float3 * tris, const int F)
+float * rasterize_tris(const float3 * tris, const int F, const int R, const float band)
 {
     uint * idx;
     uint * grid;
@@ -149,27 +157,56 @@ float * rasterize_tris(const float3 * tris, const int F)
     uint * outIdx;
     uint * outGrid;
 
-    const uint blocks = ceil_div(64 * 64 * 64 * F, NTHREAD_1D);
+    const uint La = R >= 256 ? 16 : 8;
+    const uint Lb = R / La;
+    assert(R % La == 0);
     cudaMallocManaged(&totalSize, sizeof(uint));
+    *totalSize = 0;
+    uint blocks = ceil_div(La * La * La * F, NTHREAD_1D);
     cudaMallocManaged(&tempBlockOffset, blocks * sizeof(uint));
 
+    // layer a
     rasterize_layer_kernel<true><<<blocks, NTHREAD_1D>>>(
-        tris, idx, grid, 64, F, 64, 3, tempBlockOffset, totalSize, nullptr, nullptr
+        tris, idx, grid, La, F, La, band, tempBlockOffset, totalSize, nullptr, nullptr
+    );
+    cudaDeviceSynchronize();
+    const uint las = *totalSize;
+    cudaMallocManaged(&outIdx, las * sizeof(uint));
+    cudaMallocManaged(&outGrid, las * sizeof(uint));
+    rasterize_layer_kernel<false><<<blocks, NTHREAD_1D>>>(
+        tris, idx, grid, La, F, La, band, tempBlockOffset, nullptr, outIdx, outGrid
+    );
+    cudaDeviceSynchronize();
+
+    cudaFree(idx);
+    cudaFree(grid);
+    cudaFree(tempBlockOffset);
+    idx = outIdx;
+    grid = outGrid;
+
+    // layer b
+    blocks = ceil_div(Lb * Lb * Lb * las, NTHREAD_1D);
+    *totalSize = 0;
+    cudaMallocManaged(&tempBlockOffset, blocks * sizeof(uint));
+    rasterize_layer_kernel<true><<<blocks, NTHREAD_1D>>>(
+        tris, idx, grid, Lb, las, R, band, tempBlockOffset, totalSize, nullptr, nullptr
     );
     cudaDeviceSynchronize();
     cudaMallocManaged(&outIdx, *totalSize * sizeof(uint));
     cudaMallocManaged(&outGrid, *totalSize * sizeof(uint));
     rasterize_layer_kernel<false><<<blocks, NTHREAD_1D>>>(
-        tris, idx, grid, 64, F, 64, 3, tempBlockOffset, totalSize, outIdx, outGrid
+        tris, idx, grid, Lb, las, R, band, tempBlockOffset, nullptr, outIdx, outGrid
     );
     cudaDeviceSynchronize();
 
     float * gridDist = nullptr;
-    assert(CUDA_SUCCESS == cudaMallocManaged(&gridDist, 64 * 64 * 64 * sizeof(float)));
-    for (int i = 0; i < 64 * 64 * 64; i++)
-        gridDist[i] = 1e9f;
+    assert(CUDA_SUCCESS == cudaMallocManaged(&gridDist, R * R * R * sizeof(float)));
+    rasterize_fill_kernel<<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
+        1e9f, R * R * R, gridDist
+    );
+    cudaDeviceSynchronize();
     rasterize_reduce_kernel<<<ceil_div(*totalSize, NTHREAD_1D), NTHREAD_1D>>>(
-        tris, outIdx, outGrid, *totalSize, 64, gridDist
+        tris, outIdx, outGrid, *totalSize, R, gridDist
     );
     
     cudaFree(idx);

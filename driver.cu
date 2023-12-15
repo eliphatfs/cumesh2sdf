@@ -4,14 +4,14 @@
 #include <vector>
 
 
-int main()
+int main(int argc, char ** argv)
 {
-    std::ifstream fi("input.txt");
+    std::ifstream fi(argv[argc - 1]);
     int F;
     fi >> F;
     // copies all data into buffer
     float3 * tris;
-    cudaMallocManaged(&tris, F * 9 * sizeof(float));
+    cudaMallocManaged(&tris, F * 3 * sizeof(float3));
 
     for (int i = 0; i < F; i++)
         for (int j = 0; j < 3; j++)
@@ -21,15 +21,15 @@ int main()
     // for (int i = 0; i < buffer.size() / 3 / sizeof(float); i++)
     //     printf("%.2f %.2f %.2f\n", tris[i].x, tris[i].y, tris[i].z);
 
-    float * gridDist = rasterize_tris(tris, F);
+    float * gridDist = rasterize_tris(tris, F, 128, 4.0f / 128);
     cudaDeviceSynchronize();
 
     std::ofstream fo("output.txt", std::fstream::trunc);
-    for (int i = 0; i < 64; i++)
-        for (int j = 0; j < 64; j++)
+    for (int i = 0; i < 128; i++)
+        for (int j = 0; j < 128; j++)
         {
-            for (int k = 0; k < 64; k++)
-                fo << gridDist[i * 64 * 64 + j * 64 + k] << '\t';
+            for (int k = 0; k < 128; k++)
+                fo << gridDist[i * 128 * 128 + j * 128 + k] << '\t';
             fo << '\n';
         }
     cudaFree(tris);
