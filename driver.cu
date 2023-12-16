@@ -27,7 +27,7 @@ int main(int argc, char ** argv)
     // for (int i = 0; i < buffer.size() / 3 / sizeof(float); i++)
     //     printf("%.2f %.2f %.2f\n", tris[i].x, tris[i].y, tris[i].z);
 
-    float * gridDist = rasterize_tris(tris, F, 128, 4.0f / 128);
+    RasterizeResult rast = rasterize_tris(tris, F, 128, 4.0f / 128);
     cudaDeviceSynchronize();
     const auto rasterizePhase = clock.now() - start;
     start = clock.now();
@@ -37,11 +37,11 @@ int main(int argc, char ** argv)
         for (int j = 0; j < 128; j++)
         {
             for (int k = 0; k < 128; k++)
-                fo << gridDist[i * 128 * 128 + j * 128 + k] << '\t';
+                fo << rast.gridDist[i * 128 * 128 + j * 128 + k] << '\t';
             fo << '\n';
         }
     cudaFree(tris);
-    cudaFree(gridDist);
+    rast.free();
     const auto outputPhase = clock.now() - start;
     start = clock.now();
 
