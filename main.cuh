@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <utility>
 #include "grid.cuh"
 #include "geometry.cuh"
 constexpr const int TILE_SIZE = 8;
@@ -175,6 +176,28 @@ __global__ void rasterize_arg_reduce_kernel(
 
     if (sqrt(point_to_tri_dist_sqr(v1, v2, v3, fxyz)) == gridDist[access])
         atomicMax(outGridIdx + access, tofs);
+}
+
+__forceinline__ __device__ uint cts_find(const uint * parents, const uint i)
+{
+    // REVIEW: we shall not use path compression?
+    // Because parallelism is good without atomic writes.
+    uint c = i;
+    while (parents[c] != c)
+        c = parents[c];
+    return c;
+}
+
+__forceinline__ __device__ void cts_atomic_union(uint * parents, uint x, uint y)
+{
+    while (true)
+    {
+        x = cts_find(parents, x);
+        y = cts_find(parents, y);
+        if (x == y) return;
+        if (atomicMin(&parents[y], x) == y)
+            return;
+    }
 }
 
 void volume_scan_cuda(const float * tris, float * grid, const int N)
