@@ -57,8 +57,7 @@ __forceinline__ __device__ uint vhash3(uint3 v)
 
 __forceinline__ __device__ uint shuffler(uint v, uint bmask)
 {
-    return v;
-    // return (v * (v + 1) / 2) & bmask;
+    return (v * (v + 1) / 2) & bmask;
 }
 
 template<bool probe>
