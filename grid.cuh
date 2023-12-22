@@ -19,6 +19,11 @@ __forceinline__ __device__ uint3 f2i(const float3 gridCoo)
     return make_uint3(gridCoo.x, gridCoo.y, gridCoo.z);
 }
 
+__forceinline__ __device__ float3 i2f(const uint3 gridCoo)
+{
+    return make_float3(gridCoo.x, gridCoo.y, gridCoo.z);
+}
+
 __forceinline__ __device__ uint to_gidx(const uint3 ijk, const int N)
 {
     assert(ijk.x < N && ijk.y < N && ijk.z < N);
