@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <float.h>
 #include <utility>
 #include "grid.cuh"
 #include "geometry.cuh"
@@ -19,12 +20,14 @@ inline void _cuda_check(cudaError_t code, const char *file, int line)
 struct RasterizeResult
 {
     float * gridDist;
-    int * gridIdx;
+    float3 * gridPseudoNormal;
+    int * gridRepPoint;
 
     void free()
     {
         cudaFree(gridDist);
-        cudaFree(gridIdx);
+        cudaFree(gridPseudoNormal);
+        cudaFree(gridRepPoint);
     }
 };
 
@@ -127,7 +130,7 @@ __device__ __forceinline__ static float atomicMin(float* address, float val)
 }
 
 template<typename T>
-__global__ void common_fill_kernel(const T val, const T L, T * outGrid)
+__global__ void common_fill_kernel(const T val, const uint L, T * outGrid)
 {
     const uint g = blockIdx.x * blockDim.x + threadIdx.x;
     if (g >= L) return;
@@ -166,7 +169,7 @@ __global__ void rasterize_reduce_kernel(
 
 __global__ void rasterize_arg_reduce_kernel(
     const float3 * tris, const uint * idx, const uint * grid, const int M, const int N,
-    const float * gridDist, int * outGridIdx
+    const float * gridDist, float3 * outGridPseudoNormal, int * outGridRepIdx
 ) {
     const uint g = blockIdx.x * blockDim.x + threadIdx.x;
     if (g >= M) return;
@@ -179,8 +182,25 @@ __global__ void rasterize_arg_reduce_kernel(
     const float3 v2 = tris[tofs * 3 + 1];
     const float3 v3 = tris[tofs * 3 + 2];
 
-    if (sqrt(point_to_tri_dist_sqr(v1, v2, v3, fxyz)) == gridDist[access])
-        atomicMax(outGridIdx + access, tofs);
+    const float cmp = gridDist[access] + FLT_EPSILON;
+    if (sqrt(point_to_tri_dist_sqr(v1, v2, v3, fxyz)) < cmp)
+    {
+        // TODO: pseudo-normal for vertices? how to handle float-point errors?
+        // https://dl.acm.org/doi/pdf/10.5555/2619648.2619655
+        // Signed Distance Fields for Polygon Soup Meshes
+        // https://backend.orbit.dtu.dk/ws/portalfiles/portal/3977815/B%C3%A6rentzen.pdf
+        // Signed distance computation using the angle weighted pseudonormal
+        const float3 n = normalize(cross(v2 - v1, v3 - v1));
+        atomicAdd(&outGridPseudoNormal[access].x, n.x);
+        atomicAdd(&outGridPseudoNormal[access].y, n.y);
+        atomicAdd(&outGridPseudoNormal[access].z, n.z);
+        uint pt = tofs * 3;
+        if (sqrt(point_to_segment_dist_sqr(v2, v3, fxyz)) < cmp)
+            pt = tofs * 3 + 1;
+        if (length(v3 - fxyz) < cmp)
+            pt = tofs * 3 + 2;
+        atomicMax(&outGridRepIdx[access], pt);
+    }
 }
 
 RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, const float band)
@@ -249,18 +269,23 @@ RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, co
 
     RasterizeResult rasterizeResult;
     CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridDist, R * R * R * sizeof(float)));
-    CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridIdx, R * R * R * sizeof(int)));
+    CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridPseudoNormal, R * R * R * sizeof(float3)));
+    CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridRepPoint, R * R * R * sizeof(int)));
     common_fill_kernel<float><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
         1e9f, R * R * R, rasterizeResult.gridDist
     );
+    common_fill_kernel<float3><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
+        make_float3(0, 0, 0), R * R * R, rasterizeResult.gridPseudoNormal
+    );
     common_fill_kernel<int><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
-        -1, R * R * R, rasterizeResult.gridIdx
+        -1, R * R * R, rasterizeResult.gridRepPoint
     );
     rasterize_reduce_kernel<<<ceil_div(lbs, NTHREAD_1D), NTHREAD_1D>>>(
         tris, outIdx, outGrid, lbs, R, rasterizeResult.gridDist
     );
     rasterize_arg_reduce_kernel<<<ceil_div(lbs, NTHREAD_1D), NTHREAD_1D>>>(
-        tris, outIdx, outGrid, lbs, R, rasterizeResult.gridDist, rasterizeResult.gridIdx
+        tris, outIdx, outGrid, lbs, R,
+        rasterizeResult.gridDist, rasterizeResult.gridPseudoNormal, rasterizeResult.gridRepPoint
     );
     
     CHECK_CUDA(cudaDeviceSynchronize());
@@ -306,9 +331,9 @@ __global__ void volume_cts_kernel(const float3 * tris, const RasterizeResult ras
     const uint access = to_gidx(xyz, N);
     const uint shfm = shuffler(access, shfBitmask);
     const uint shfex = shuffler(N * N * N, shfBitmask);
-    const int tofs = rast.gridIdx[access];
+    const int dist = rast.gridDist[access];
 
-    if (tofs == -1)
+    if (dist > 2.0f / N)
     {
         if (xyz.x == 0 || xyz.y == 0 || xyz.z == 0)
            cts_atomic_union(parents, shfm, shfex);
@@ -323,7 +348,7 @@ __global__ void volume_cts_kernel(const float3 * tris, const RasterizeResult ras
             for (int s = 0; s < 3; s++)
             {
                 const uint naccess = to_gidx(check[s], N);
-                if (rast.gridIdx[naccess] == -1)
+                if (rast.gridDist[naccess] > 2.0f / N)
                     cts_atomic_union(parents, shfm, shuffler(naccess, shfBitmask));
             }
         }
@@ -339,30 +364,28 @@ __global__ void volume_cts_kernel(const float3 * tris, const RasterizeResult ras
             xyz + make_uint3(0, 0, 1),
         };
         const float3 c0 = (i2f(xyz) + 0.5f) / (float)N;
-        const float3 v01 = tris[tofs * 3];
-        const float3 v02 = tris[tofs * 3 + 1];
-        const float3 v03 = tris[tofs * 3 + 2];
-        const float3 n0 = cross(v02 - v01, v03 - v01);
+        const float3 v0 = tris[rast.gridRepPoint[access]];
+        const float3 n0 = rast.gridPseudoNormal[access];
         #pragma unroll
         for (int s = 0; s < 6; s++)
         {
             const uint3 z1 = clamp(check[s], 0, N - 1);
             const float3 c1 = (i2f(check[s]) + 0.5f) / (float)N;
-            if (dot(c0 - v01, n0) * dot(c1 - v01, n0) <= 0)
-                continue;
             const uint naccess = to_gidx(z1, N);
-            const int tofs1 = rast.gridIdx[naccess];
-            if (tofs1 == -1)
+            if (rast.gridRepPoint[naccess] == -1)
             {
+                if (!(dot(c0 - v0, n0) * dot(c1 - v0, n0) > 0))
+                    continue;
                 cts_atomic_union(parents, shfm, shuffler(naccess, shfBitmask));
-                continue;
             }
-            const float3 v11 = tris[tofs1 * 3];
-            const float3 v12 = tris[tofs1 * 3 + 1];
-            const float3 v13 = tris[tofs1 * 3 + 2];
-            const float3 n1 = cross(v12 - v11, v13 - v11);
-            if (dot(c0 - v11, n1) * dot(c1 - v11, n1) > 0)
+            else
+            {
+                const float3 v1 = tris[rast.gridRepPoint[naccess]];
+                const float3 n1 = rast.gridPseudoNormal[naccess];
+                if (!(dot(c0 - v0, n0) * dot(c1 - v1, n1) > 0))
+                    continue;
                 cts_atomic_union(parents, shfm, shuffler(naccess, shfBitmask));
+            }
         }
     }
 }
