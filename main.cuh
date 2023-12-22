@@ -68,8 +68,8 @@ __global__ void rasterize_layer_kernel(
     // grid [M] packed grid position
     // S subdiv
     // N scale of current grid, pre-multiplied by S
-    const int b = blockIdx.x;
-    const int g = blockIdx.x * blockDim.x + threadIdx.x;
+    const uint b = blockIdx.x;
+    const long long g = blockIdx.x * (long long)blockDim.x + threadIdx.x;
     if (g >= S * S * S * M) return;
 
     __shared__ uint blockSize;
@@ -77,9 +77,10 @@ __global__ void rasterize_layer_kernel(
     if (threadIdx.x == 0) blockSize = 0;
     __syncthreads();
 
-    const int i = g % S;
-    const int j = (g / S) % S;
-    const int k = (g / (S * S)) % S;
+    const int mo = g % (S * S * S);
+    const int i = mo % S;
+    const int j = (mo / S) % S;
+    const int k = (mo / (S * S)) % S;
     const int t = g / (S * S * S);
 
     const uint tofs = idx[t];
@@ -149,7 +150,7 @@ __global__ void rasterize_reduce_kernel(
     // grid [M] packed grid position
     // N size of target grid
     // outGridDist: [N, N, N] distance
-    const int g = blockIdx.x * blockDim.x + threadIdx.x;
+    const uint g = blockIdx.x * blockDim.x + threadIdx.x;
     if (g >= M) return;
     const uint3 nxyz = unpack_id(grid[g]);
     const float3 fxyz = (make_float3(nxyz.x, nxyz.y, nxyz.z) + 0.5f) / (float)N;
@@ -167,7 +168,7 @@ __global__ void rasterize_arg_reduce_kernel(
     const float3 * tris, const uint * idx, const uint * grid, const int M, const int N,
     const float * gridDist, int * outGridIdx
 ) {
-    const int g = blockIdx.x * blockDim.x + threadIdx.x;
+    const uint g = blockIdx.x * blockDim.x + threadIdx.x;
     if (g >= M) return;
     const uint3 nxyz = unpack_id(grid[g]);
     const float3 fxyz = (make_float3(nxyz.x, nxyz.y, nxyz.z) + 0.5f) / (float)N;
@@ -231,7 +232,7 @@ RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, co
     grid = outGrid;
 
     // layer b
-    assert((long long)Lb * (long long)Lb * (long long)Lb * (long long)las < 2147483647);
+    // assert((long long)Lb * (long long)Lb * (long long)Lb * (long long)las < 4294967295u);
     blocks = ceil_div(Lb * Lb * Lb * las, NTHREAD_1D);
     *totalSize = 0;
     CHECK_CUDA(cudaMallocManaged(&tempBlockOffset, blocks * sizeof(uint)));
