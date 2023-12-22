@@ -11,6 +11,11 @@ int main(int argc, char ** argv)
     std::chrono::high_resolution_clock clock;
     auto start = clock.now();
     std::ifstream fi(argv[argc - 1]);
+    if (!fi)
+    {
+        std::cerr << "[Error] Cannot open input file" << std::endl;
+        return 1;
+    }
     int F;
     fi >> F;
     // copies all data into buffer
