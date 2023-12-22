@@ -93,8 +93,6 @@ __global__ void rasterize_layer_kernel(
     
     const float thresh = 0.87 / N + band;
     const bool intersect = point_to_tri_dist_sqr(v1, v2, v3, fxyz) < thresh * thresh;
-    // if (!intersect && g == 0)
-    //     printf("%.2f %.2f %.2f %f", fxyz.x, fxyz.y, fxyz.z, point_to_tri_dist_sqr(v1, v2, v3, fxyz));
     
     if (intersect)
     {
@@ -127,18 +125,19 @@ __device__ __forceinline__ static float atomicMin(float* address, float val)
     return __int_as_float(old);
 }
 
-__global__ void rasterize_fill_kernel(const float val, const int L, float * outGrid)
+template<typename T>
+__global__ void common_fill_kernel(const T val, const T L, T * outGrid)
 {
     const uint g = blockIdx.x * blockDim.x + threadIdx.x;
     if (g >= L) return;
     outGrid[g] = val;
 }
 
-__global__ void rasterize_fill_kernel(const int val, const int L, int * outGrid)
+__global__ void common_arange_kernel(uint * t, uint limit)
 {
     const uint g = blockIdx.x * blockDim.x + threadIdx.x;
-    if (g >= L) return;
-    outGrid[g] = val;
+    if (g >= limit) return;
+    t[g] = g;
 }
 
 __global__ void rasterize_reduce_kernel(
@@ -192,11 +191,9 @@ RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, co
     CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_reduce_kernel, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_arg_reduce_kernel, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaMallocManaged(&idx, F * sizeof(uint)));
-    CHECK_CUDA(cudaMallocManaged(&grid, sizeof(uint)));
+    CHECK_CUDA(cudaMallocManaged(&grid, F * sizeof(uint)));
 
-    for (uint i = 0; i < F; i++)
-        idx[i] = i;
-    grid[0] = pack_id(make_uint3(0, 0, 0));
+    uint startId = pack_id(make_uint3(0, 0, 0));
 
     uint * tempBlockOffset;
     uint * totalSize;
@@ -210,6 +207,9 @@ RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, co
     *totalSize = 0;
     uint blocks = ceil_div(La * La * La * F, NTHREAD_1D);
     CHECK_CUDA(cudaMallocManaged(&tempBlockOffset, blocks * sizeof(uint)));
+
+    common_arange_kernel<<<ceil_div(F, NTHREAD_1D), NTHREAD_1D>>>(idx, F);
+    common_fill_kernel<uint><<<ceil_div(F, NTHREAD_1D), NTHREAD_1D>>>(startId, F, grid);
 
     // layer a
     rasterize_layer_kernel<true><<<blocks, NTHREAD_1D>>>(
@@ -249,10 +249,10 @@ RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, co
     RasterizeResult rasterizeResult;
     CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridDist, R * R * R * sizeof(float)));
     CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridIdx, R * R * R * sizeof(int)));
-    rasterize_fill_kernel<<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
+    common_fill_kernel<float><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
         1e9f, R * R * R, rasterizeResult.gridDist
     );
-    rasterize_fill_kernel<<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
+    common_fill_kernel<int><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
         -1, R * R * R, rasterizeResult.gridIdx
     );
     rasterize_reduce_kernel<<<ceil_div(lbs, NTHREAD_1D), NTHREAD_1D>>>(
@@ -296,13 +296,6 @@ __forceinline__ __device__ void cts_atomic_union(uint * __restrict__ parents, ui
             return;
         atomicCAS(&parents[max(x, y)], max(x, y), min(x, y));
     }
-}
-
-__global__ void volume_cts_init_kernel(uint * parents, uint limit)
-{
-    const uint g = blockIdx.x * blockDim.x + threadIdx.x;
-    if (g >= limit) return;
-    parents[g] = g;
 }
 
 __global__ void volume_cts_kernel(const float3 * tris, const RasterizeResult rast, uint * parents, const uint N, const int shfBitmask)
@@ -426,11 +419,11 @@ void fill_signs(const float3 * tris, const int N, RasterizeResult rast)
     const uint shfBitmask = npo2(N * N * N + 1) - 1;
     CHECK_CUDA(cudaMallocManaged(&parents, npo2(N * N * N + 1) * sizeof(uint)));
 
-    CHECK_CUDA(cudaFuncSetCacheConfig(volume_cts_init_kernel, cudaFuncCachePreferL1));
+    CHECK_CUDA(cudaFuncSetCacheConfig(common_arange_kernel, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_cts_kernel, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_apply_sign_kernel, cudaFuncCachePreferL1));
 
-    volume_cts_init_kernel<<<ceil_div(nodeCount, NTHREAD_1D), NTHREAD_1D>>>(parents, nodeCount);
+    common_arange_kernel<<<ceil_div(nodeCount, NTHREAD_1D), NTHREAD_1D>>>(parents, nodeCount);
     CHECK_CUDA(cudaDeviceSynchronize());
     volume_cts_kernel<<<dimBlock, dimGrid>>>(tris, rast, parents, N, shfBitmask);
     CHECK_CUDA(cudaDeviceSynchronize());
