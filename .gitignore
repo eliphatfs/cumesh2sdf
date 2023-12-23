@@ -6,3 +6,5 @@ dist
 test_outputs
 .coverage
 .vscode
+bin
+*.pyd
