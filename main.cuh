@@ -37,25 +37,6 @@ constexpr int ceil_div(const int a, const int b)
     return ((a) + (b) - 1) / (b);
 }
 
-__forceinline__ __device__ uint shash(uint x)
-{
-    x = ((x >> 16) ^ x) * 0x45d9f3b;
-    x = ((x >> 16) ^ x) * 0x45d9f3b;
-    x = (x >> 16) ^ x;
-    return x;
-}
-
-__forceinline__ __device__ uint chash(uint seed, uint value)
-{
-    // formula from boost
-    return value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-}
-
-__forceinline__ __device__ uint vhash3(uint3 v)
-{
-    return chash(chash(shash(v.x), shash(v.y)), shash(v.z));
-}
-
 __forceinline__ __device__ uint shuffler(uint v, uint bmask)
 {
     return (v * (v + 1) / 2) & bmask;
@@ -401,22 +382,6 @@ __global__ void volume_apply_sign_kernel(RasterizeResult rast, const uint * pare
 
     if (cts_find(parents, shfm) != root)
         rast.gridDist[access] *= -1;
-}
-
-__global__ void volume_bellman_ford_kernel(const float * tris, RasterizeResult rast, bool * gridIsEx, bool * globalChanged, const int N)
-{
-    // alternative algorithm to union-find
-    uint3 xyz = blockIdx * blockDim + threadIdx;
-    if (xyz.x >= N || xyz.y >= N || xyz.z >= N) return;
-    uint access = to_gidx(xyz, N);
-    int changed = 0;
-    #pragma unroll
-    for (int it = 0; it < 16; it++)
-    {
-
-    }
-    changed = __syncthreads_or(changed);
-    if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && changed) *globalChanged = true;
 }
 
 inline uint npo2(const uint n)
