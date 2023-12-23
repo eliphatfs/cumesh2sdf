@@ -1,3 +1,4 @@
+#pragma once
 #include <assert.h>
 #include <float.h>
 #include <utility>
