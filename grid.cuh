@@ -1,7 +1,5 @@
 #pragma once
-#include <cuda.h>
-#include <stdint.h>
-#include "helper_math.h"
+#include "commons.cuh"
 constexpr const uint GRID_BITS = 10;
 constexpr const uint GRID_MASK = (1 << GRID_BITS) - 1;
 
