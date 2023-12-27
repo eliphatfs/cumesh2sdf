@@ -4,7 +4,7 @@
 #include "geometry.cuh"
 #include "commons.cuh"
 #include "rasterize.cuh"
-#include "sign_union_find.cuh"
+#include "sign.cuh"
 constexpr const int TILE_SIZE = 8;
 constexpr const int NTHREAD_1D = 512;
 
