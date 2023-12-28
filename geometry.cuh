@@ -66,7 +66,7 @@ __forceinline__ __device__ float point_to_tri_dist_sqr(float3 v1, float3 v2, flo
 
 __forceinline__ __device__ bool is_approx_equal(const float a, const float b)
 {
-  return (a - b) < FLT_EPSILON;
+  return abs(a - b) < FLT_EPSILON;
 }
 
 __forceinline__ __device__ bool is_approx_equal(const float3 a, const float3 b)
@@ -104,7 +104,6 @@ __forceinline__ __device__ float3 closest_point_on_triangle_to_point(
     const float3& a, const float3& b, const float3& c, const float3& p)
 {
     float uvw[3] = {0, 0, 0};
-
     // degenerate triangle, singular
     if ((is_approx_equal(a, b) && is_approx_equal(a, c))) {
         uvw[0] = 1.0;
