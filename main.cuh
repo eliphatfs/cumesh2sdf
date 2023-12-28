@@ -40,12 +40,15 @@ RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, co
     CHECK_CUDA(cudaMallocManaged(&tempBlockOffset, blocks * sizeof(uint)));
 
     common_arange_kernel<<<ceil_div(F, NTHREAD_1D), NTHREAD_1D>>>(idx, F);
+    CHECK_CUDA(cudaGetLastError());
     common_fill_kernel<uint><<<ceil_div(F, NTHREAD_1D), NTHREAD_1D>>>(startId, F, grid);
+    CHECK_CUDA(cudaGetLastError());
 
     // layer a
     rasterize_layer_kernel<true><<<blocks, NTHREAD_1D>>>(
         tris, idx, grid, La, F, La, band, tempBlockOffset, totalSize, nullptr, nullptr
     );
+    CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
     const uint las = *totalSize;
     CHECK_CUDA(cudaMallocManaged(&outIdx, las * sizeof(uint)));
@@ -53,6 +56,7 @@ RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, co
     rasterize_layer_kernel<false><<<blocks, NTHREAD_1D>>>(
         tris, idx, grid, La, F, La, band, tempBlockOffset, nullptr, outIdx, outGrid
     );
+    CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
 
     CHECK_CUDA(cudaFree(idx));
@@ -69,6 +73,7 @@ RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, co
     rasterize_layer_kernel<true><<<blocks, NTHREAD_1D>>>(
         tris, idx, grid, Lb, las, R, band, tempBlockOffset, totalSize, nullptr, nullptr
     );
+    CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
     const uint lbs = *totalSize;
     CHECK_CUDA(cudaMallocManaged(&outIdx, lbs * sizeof(uint)));
@@ -76,27 +81,28 @@ RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, co
     rasterize_layer_kernel<false><<<blocks, NTHREAD_1D>>>(
         tris, idx, grid, Lb, las, R, band, tempBlockOffset, nullptr, outIdx, outGrid
     );
+    CHECK_CUDA(cudaGetLastError());
 
     RasterizeResult rasterizeResult;
     CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridDist, R * R * R * sizeof(float)));
-    CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridPseudoNormal, R * R * R * sizeof(float3)));
-    CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridRepPoint, R * R * R * sizeof(int)));
+    CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridIdx, R * R * R * sizeof(int)));
     common_fill_kernel<float><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
         1e9f, R * R * R, rasterizeResult.gridDist
     );
-    common_fill_kernel<float3><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
-        make_float3(0, 0, 0), R * R * R, rasterizeResult.gridPseudoNormal
-    );
+    CHECK_CUDA(cudaGetLastError());
     common_fill_kernel<int><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
-        -1, R * R * R, rasterizeResult.gridRepPoint
+        -1, R * R * R, rasterizeResult.gridIdx
     );
+    CHECK_CUDA(cudaGetLastError());
     rasterize_reduce_kernel<<<ceil_div(lbs, NTHREAD_1D), NTHREAD_1D>>>(
         tris, outIdx, outGrid, lbs, R, rasterizeResult.gridDist
     );
+    CHECK_CUDA(cudaGetLastError());
     rasterize_arg_reduce_kernel<<<ceil_div(lbs, NTHREAD_1D), NTHREAD_1D>>>(
         tris, outIdx, outGrid, lbs, R,
-        rasterizeResult.gridDist, rasterizeResult.gridPseudoNormal, rasterizeResult.gridRepPoint
+        rasterizeResult.gridDist, rasterizeResult.gridIdx
     );
+    CHECK_CUDA(cudaGetLastError());
     
     CHECK_CUDA(cudaDeviceSynchronize());
     CHECK_CUDA(cudaFree(idx));
@@ -111,25 +117,33 @@ RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, co
 
 void fill_signs(const float3 * tris, const int N, RasterizeResult rast)
 {
-    dim3 dimBlock(ceil_div(N, TILE_SIZE), ceil_div(N, TILE_SIZE), ceil_div(N, TILE_SIZE));
-    dim3 dimGrid(TILE_SIZE, TILE_SIZE, TILE_SIZE);
-    // cudaFuncSetCacheConfig(volume_bellman_ford_kernel, cudaFuncCachePreferL1);
-    // volume_bellman_ford_kernel<<<dimBlock, dimGrid>>>(tris, rast, nullptr, N);
-    uint * parents;
-    const uint nodeCount = npo2(N * N * N + 1);
-    const uint shfBitmask = npo2(N * N * N + 1) - 1;
-    CHECK_CUDA(cudaMallocManaged(&parents, npo2(N * N * N + 1) * sizeof(uint)));
+    dim3 dimBlock(ceil_div(N, 16), ceil_div(N, 16), ceil_div(N, 1));
+    dim3 dimGrid(16, 16, 1);
 
-    CHECK_CUDA(cudaFuncSetCacheConfig(common_arange_kernel, cudaFuncCachePreferL1));
-    CHECK_CUDA(cudaFuncSetCacheConfig(volume_cts_kernel, cudaFuncCachePreferL1));
-    CHECK_CUDA(cudaFuncSetCacheConfig(volume_apply_sign_kernel, cudaFuncCachePreferL1));
+    char * state;
+    bool * changed;
+    CHECK_CUDA(cudaMallocManaged(&state, N * N * N * sizeof(char)));
+    CHECK_CUDA(cudaMallocManaged(&changed, sizeof(bool)));
+    *changed = true;
 
-    common_arange_kernel<<<ceil_div(nodeCount, NTHREAD_1D), NTHREAD_1D>>>(parents, nodeCount);
+    CHECK_CUDA(cudaFuncSetCacheConfig(volume_bellman_ford_kernel, cudaFuncCachePreferL1));
+    common_fill_kernel<char><<<ceil_div(N * N * N, NTHREAD_1D), NTHREAD_1D>>>(0, N * N * N, state);
     CHECK_CUDA(cudaDeviceSynchronize());
-    volume_cts_kernel<<<dimBlock, dimGrid>>>(tris, rast, parents, N, shfBitmask);
-    CHECK_CUDA(cudaDeviceSynchronize());
-    volume_apply_sign_kernel<<<dimBlock, dimGrid>>>(rast, parents, N, shfBitmask);
+
+    while (*changed)
+    {
+        *changed = false;
+        for (int it = 0; it < CPU_ITER; it++)
+        {
+            volume_bellman_ford_kernel<<<dimBlock, dimGrid>>>(tris, rast, state, N, changed);
+            CHECK_CUDA(cudaGetLastError());
+        }
+        CHECK_CUDA(cudaDeviceSynchronize());
+    }
+
+    CHECK_CUDA(cudaFree(changed));
+    volume_apply_sign_kernel<<<dimBlock, dimGrid>>>(rast, state, N);
 
     CHECK_CUDA(cudaDeviceSynchronize());
-    CHECK_CUDA(cudaFree(parents));
+    CHECK_CUDA(cudaFree(state));
 }

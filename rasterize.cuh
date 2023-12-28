@@ -1,6 +1,7 @@
 #pragma once
 #include "commons.cuh"
 #include "geometry.cuh"
+#include "grid.cuh"
 
 
 template<bool probe>
@@ -85,7 +86,7 @@ __global__ void rasterize_reduce_kernel(
 
 __global__ void rasterize_arg_reduce_kernel(
     const float3 * tris, const uint * idx, const uint * grid, const int M, const int N,
-    const float * gridDist, float3 * outGridPseudoNormal, int * outGridRepIdx
+    const float * gridDist, int * outGridRepIdx
 ) {
     const uint g = blockIdx.x * blockDim.x + threadIdx.x;
     if (g >= M) return;
@@ -98,23 +99,23 @@ __global__ void rasterize_arg_reduce_kernel(
     const float3 v2 = tris[tofs * 3 + 1];
     const float3 v3 = tris[tofs * 3 + 2];
 
-    const float cmp = gridDist[access] + FLT_EPSILON;
-    if (sqrt(point_to_tri_dist_sqr(v1, v2, v3, fxyz)) < cmp)
+    // const float cmp = gridDist[access] + FLT_EPSILON;
+    if (sqrt(point_to_tri_dist_sqr(v1, v2, v3, fxyz)) == gridDist[access])
     {
         // TODO: pseudo-normal for vertices? how to handle float-point errors?
         // https://dl.acm.org/doi/pdf/10.5555/2619648.2619655
         // Signed Distance Fields for Polygon Soup Meshes
         // https://backend.orbit.dtu.dk/ws/portalfiles/portal/3977815/B%C3%A6rentzen.pdf
         // Signed distance computation using the angle weighted pseudonormal
-        const float3 n = normalize(cross(v2 - v1, v3 - v1));
-        atomicAdd(&outGridPseudoNormal[access].x, n.x);
-        atomicAdd(&outGridPseudoNormal[access].y, n.y);
-        atomicAdd(&outGridPseudoNormal[access].z, n.z);
-        uint pt = tofs * 3;
-        if (sqrt(point_to_segment_dist_sqr(v2, v3, fxyz)) < cmp)
-            pt = tofs * 3 + 1;
-        if (length(v3 - fxyz) < cmp)
-            pt = tofs * 3 + 2;
-        atomicMax(&outGridRepIdx[access], pt);
+        // const float3 n = normalize(cross(v2 - v1, v3 - v1));
+        // atomicAdd(&outGridPseudoNormal[access].x, n.x);
+        // atomicAdd(&outGridPseudoNormal[access].y, n.y);
+        // atomicAdd(&outGridPseudoNormal[access].z, n.z);
+        // uint pt = tofs * 3;
+        // if (sqrt(point_to_segment_dist_sqr(v2, v3, fxyz)) < cmp)
+        //     pt = tofs * 3 + 1;
+        // if (length(v3 - fxyz) < cmp)
+        //     pt = tofs * 3 + 2;
+        atomicMax(outGridRepIdx + access, tofs);
     }
 }

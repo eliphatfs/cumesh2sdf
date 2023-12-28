@@ -4,151 +4,123 @@
 #include "geometry.cuh"
 #include "grid.cuh"
 
-__forceinline__ __device__ uint shuffler(uint v, uint bmask)
-{
-    return (v * (v + 1) / 2) & bmask;
-}
+constexpr const int KERNEL_ITER = 8;
+constexpr const int CPU_ITER = 1;
 
-__forceinline__ __device__ uint cts_find(const uint * parents, const uint i)
+__forceinline__ __device__ bool vertex_relax(const float3 * tris, const RasterizeResult rast, const int3 xyz, char * state, const uint N)
 {
-    // REVIEW: we shall not use path compression?
-    // Because parallelism is good without atomic writes.
-    uint c = i;
-    while (parents[c] != c)
-        c = parents[c];
-    return c;
-}
+    const uint access = to_gidx(make_uint3(xyz), N);
+    const float dist = rast.gridDist[access];
+    if (dist < 0.86603f / N) return false;
+    // state[access] is 2.
 
-__forceinline__ __device__ void cts_atomic_union(uint * __restrict__ parents, uint x, uint y)
-{
-    // REVIEW: I didn't use rank or size based union
-    // Because I cannot implement it without locks
-    // And we can expect xor-shuffled performance to be the same without
-    while (true)
+    const int3 check[26] = {
+        xyz - make_int3(1, 0, 0),
+        xyz - make_int3(0, 1, 0),
+        xyz - make_int3(0, 0, 1),
+
+        xyz + make_int3(1, 0, 0),
+        xyz + make_int3(0, 1, 0),
+        xyz + make_int3(0, 0, 1),
+
+        xyz + make_int3(1, -1, 0),
+        xyz + make_int3(0, 1, -1),
+        xyz + make_int3(-1, 0, 1),
+        xyz + make_int3(1, 1, 0),
+        xyz + make_int3(0, 1, 1),
+        xyz + make_int3(1, 0, 1),
+        xyz + make_int3(-1, 1, 0),
+        xyz + make_int3(0, -1, 1),
+        xyz + make_int3(1, 0, -1),
+        xyz - make_int3(1, 1, 0),
+        xyz - make_int3(0, 1, 1),
+        xyz - make_int3(1, 0, 1),
+
+        xyz + make_int3(-1, -1, -1),
+        xyz + make_int3(-1, -1, 1),
+        xyz + make_int3(-1, 1, -1),
+        xyz + make_int3(-1, 1, 1),
+        xyz + make_int3(1, -1, -1),
+        xyz + make_int3(1, -1, 1),
+        xyz + make_int3(1, 1, -1),
+        xyz + make_int3(1, 1, 1),
+    };
+
+    const float3 c0 = (i2f(make_uint3(xyz)) + 0.5f) / (float)N;
+    const int tidx = rast.gridIdx[access];
+    const int tofs = max(tidx, 0) * 3;
+    const float3 v01 = tris[tofs];
+    const float3 v02 = tris[tofs + 1];
+    const float3 v03 = tris[tofs + 2];
+    const float3 p0 = closest_point_on_triangle_to_point(v01, v02, v03, c0);
+    
+    bool changed = false;
+
+    #pragma unroll
+    for (int s = 0; s < 26; s++)
     {
-        x = cts_find(parents, x);
-        y = cts_find(parents, y);
-        if (x == y)
-            return;
-        atomicCAS(&parents[max(x, y)], max(x, y), min(x, y));
-    }
-}
-
-__global__ void volume_cts_kernel(const float3 * tris, const RasterizeResult rast, uint * parents, const uint N, const int shfBitmask)
-{
-    const uint3 xyz = blockIdx * blockDim + threadIdx;
-    if (xyz.x >= N || xyz.y >= N || xyz.z >= N) return;
-    const uint access = to_gidx(xyz, N);
-    const uint shfm = shuffler(access, shfBitmask);
-    const uint shfex = shuffler(N * N * N, shfBitmask);
-    const int dist = rast.gridDist[access];
-
-    if (dist >= 0.86603f / N)
-    {
-        if (xyz.x == 0 || xyz.y == 0 || xyz.z == 0)
-           cts_atomic_union(parents, shfm, shfex);
+        const uint3 z1 = make_uint3(clamp(check[s], 0, N - 1));
+        const uint naccess = to_gidx(z1, N);
+        if (state[naccess] != 0) continue;
+        if (rast.gridDist[naccess] >= 0.86603f / N)
+        {
+            state[naccess] = 2;
+            changed = true;
+        }
         else
         {
-            const uint3 check[7] = {
-                xyz - make_uint3(1, 0, 0),
-                xyz - make_uint3(0, 1, 0),
-                xyz - make_uint3(0, 0, 1),
-
-                xyz - make_uint3(1, 1, 0),
-                xyz - make_uint3(0, 1, 1),
-                xyz - make_uint3(1, 0, 1),
-
-                xyz - make_uint3(1, 1, 1),
-            };
-            #pragma unroll
-            for (int s = 0; s < 7; s++)
-            {
-                const uint naccess = to_gidx(check[s], N);
-                if (rast.gridDist[naccess] >= 0.86603f / N)
-                    cts_atomic_union(parents, shfm, shuffler(naccess, shfBitmask));
-            }
-        }
-    }
-    else
-    {
-        const int3 ixyz = make_int3(xyz);
-        const int3 check[26] = {
-            ixyz - make_int3(1, 0, 0),
-            ixyz - make_int3(0, 1, 0),
-            ixyz - make_int3(0, 0, 1),
-
-            ixyz + make_int3(1, 0, 0),
-            ixyz + make_int3(0, 1, 0),
-            ixyz + make_int3(0, 0, 1),
-
-            ixyz + make_int3(1, -1, 0),
-            ixyz + make_int3(0, 1, -1),
-            ixyz + make_int3(-1, 0, 1),
-            ixyz + make_int3(1, 1, 0),
-            ixyz + make_int3(0, 1, 1),
-            ixyz + make_int3(1, 0, 1),
-            ixyz + make_int3(-1, 1, 0),
-            ixyz + make_int3(0, -1, 1),
-            ixyz + make_int3(1, 0, -1),
-            ixyz - make_int3(1, 1, 0),
-            ixyz - make_int3(0, 1, 1),
-            ixyz - make_int3(1, 0, 1),
-
-            ixyz + make_int3(-1, -1, -1),
-            ixyz + make_int3(-1, -1, 1),
-            ixyz + make_int3(-1, 1, -1),
-            ixyz + make_int3(-1, 1, 1),
-            ixyz + make_int3(1, -1, -1),
-            ixyz + make_int3(1, -1, 1),
-            ixyz + make_int3(1, 1, -1),
-            ixyz + make_int3(1, 1, 1),
-        };
-        const float3 c0 = (i2f(xyz) + 0.5f) / (float)N;
-        // const float3 v0 = tris[rast.gridRepPoint[access]];
-        const float3 v1 = tris[rast.gridRepPoint[access] / 3 * 3];
-        const float3 v2 = tris[rast.gridRepPoint[access] / 3 * 3 + 1];
-        const float3 v3 = tris[rast.gridRepPoint[access] / 3 * 3 + 2];
-        const float3 p = closest_point_on_triangle_to_point(v1, v2, v3, c0);
-        // const float3 n0 = rast.gridPseudoNormal[access];
-        #pragma unroll
-        for (int s = 0; s < 26; s++)
-        {
-            const uint3 z1 = make_uint3(clamp(check[s], 0, N - 1));
+            assert(tidx >= 0);
             const float3 c1 = (i2f(z1) + 0.5f) / (float)N;
-            const uint naccess = to_gidx(z1, N);
-            const float3 nv1 = tris[rast.gridRepPoint[naccess] / 3 * 3];
-            const float3 nv2 = tris[rast.gridRepPoint[naccess] / 3 * 3 + 1];
-            const float3 nv3 = tris[rast.gridRepPoint[naccess] / 3 * 3 + 2];
-            const float3 np = closest_point_on_triangle_to_point(nv1, nv2, nv3, c1);
-            if (rast.gridDist[naccess] >= 0.86603f / N)
-            {
-                // if (!(dot(c0 - v0, n0) * dot(c1 - v0, n0) > 0))
-                //     continue;
-                if (!(dot(normalize(c0 - p), normalize(c1 - np)) > 0))
-                    continue;
-                cts_atomic_union(parents, shfm, shuffler(naccess, shfBitmask));
-            }
-            /*else
-            {
-                const float3 v1 = tris[rast.gridRepPoint[naccess]];
-                const float3 n1 = rast.gridPseudoNormal[naccess];
-                if (!(dot(c0 - v0, n0) * dot(c1 - v1, n1) > 0))
-                    continue;
-                cts_atomic_union(parents, shfm, shuffler(naccess, shfBitmask));
-            }*/
+            const int nidx = rast.gridIdx[naccess] * 3;
+            const float3 v11 = tris[nidx];
+            const float3 v12 = tris[nidx + 1];
+            const float3 v13 = tris[nidx + 2];
+            const float3 p1 = closest_point_on_triangle_to_point(v11, v12, v13, c1);
+            
+            if (!(dot(normalize(c0 - p0), normalize(c1 - p1)) > 0))
+                continue;
+            if (!(dot(normalize(c0 - p1), normalize(c1 - p1)) > 0))
+                continue;
+            if (!(dot(normalize(c0 - p0), normalize(c1 - p0)) > 0))
+                continue;
+            state[naccess] = 2;
+            changed = true;
         }
     }
+    return changed;
 }
 
-__global__ void volume_apply_sign_kernel(RasterizeResult rast, const uint * parents, const int N, const int shfBitmask)
+__global__ void volume_bellman_ford_kernel(const float3 * tris, const RasterizeResult rast, char * state, const uint N, bool * globalChanged)
 {
-    const uint root = cts_find(parents, shuffler(N * N * N, shfBitmask));
-    
+    bool changed = false;
     const uint3 xyz = blockIdx * blockDim + threadIdx;
     if (xyz.x >= N || xyz.y >= N || xyz.z >= N) return;
     const uint access = to_gidx(xyz, N);
-    const uint shfm = shuffler(access, shfBitmask);
+    if (xyz.x == 0 || xyz.y == 0 || xyz.z == 0 || xyz.x == N - 1 || xyz.y == N - 1 || xyz.z == N - 1)
+    {
+        if (state[access] == 0 && rast.gridDist[access] >= 0.86603f / N)
+        {
+            state[access] = 2;
+            changed = true;
+        }
+    }
+    for (int it = 0; it < KERNEL_ITER; it++)
+    {
+        if (state[access] != 2) continue;
+        changed |= vertex_relax(tris, rast, make_int3(xyz), state, N);
+        state[access] = 1;
+    }
+    changed = __syncthreads_or((int)changed) != 0;
+    if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && changed)
+        *globalChanged = true;
+}
 
-    if (cts_find(parents, shfm) != root)
+__global__ void volume_apply_sign_kernel(RasterizeResult rast, const char * state, const int N)
+{
+    const uint3 xyz = blockIdx * blockDim + threadIdx;
+    if (xyz.x >= N || xyz.y >= N || xyz.z >= N) return;
+    const uint access = to_gidx(xyz, N);
+
+    if (state[access] == 0)
         rast.gridDist[access] *= -1;
 }
