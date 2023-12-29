@@ -125,7 +125,7 @@ __global__ void volume_apply_sign_kernel(RasterizeResult rast, const char * stat
         rast.gridDist[access] *= -1;
 }
 
-void fill_signs(const float3 * tris, const int N, RasterizeResult rast)
+static void fill_signs(const float3 * tris, const int N, RasterizeResult rast)
 {
     dim3 dimBlock(ceil_div(N, 16), ceil_div(N, 16), ceil_div(N, 1));
     dim3 dimGrid(16, 16, 1);

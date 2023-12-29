@@ -121,7 +121,7 @@ __global__ void rasterize_arg_reduce_kernel(
     }
 }
 
-RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, const float band)
+static RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, const float band)
 {
     uint * idx;
     uint * grid;
