@@ -4,11 +4,11 @@
 struct RasterizeResult
 {
     float * gridDist;
-    int * gridIdx;
+    bool * gridCollide;
 
     void free()
     {
         cudaFree(gridDist);
-        cudaFree(gridIdx);
+        cudaFree(gridCollide);
     }
 };

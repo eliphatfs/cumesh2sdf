@@ -186,3 +186,22 @@ __forceinline__ __device__ float3 closest_point_on_triangle_to_point(
 
     return a + ab*uvw[1] + ac*uvw[2]; // = u*a + v*b + w*c , u= va*denom = 1.0-v-w
 }
+
+__forceinline__ __device__ float ray_triangle_hit_dist(float3 v1, float3 v2, float3 v3, float3 ro, float3 rd)
+{
+    v2 -= v1;
+    v3 -= v1;
+    ro -= v1;
+    const float3 cr = cross(rd, v3);
+    const float det = dot(cr, v2);
+    
+    const float u = dot(ro, cr) / det;
+    const float3 scr = cross(ro, v2);
+    const float v = dot(rd, scr) / det;
+    const float t = dot(v3, scr) / det;
+    const bool di = abs(det) > FLT_EPSILON;
+    const bool hit = di && t >= 0 && u >= 0 && v >= 0 && u + v <= 1;
+    const bool planeclose = !di && abs(dot(ro, normalize(cross(v2, v3)))) < 1e-4f;
+    // FIXME: give a good lower bound in parallel case!
+    return hit ? t : planeclose ? sqrt(point_to_tri_dist_sqr(make_float3(0, 0, 0), v2, v3, ro)) : FLT_MAX;
+}

@@ -67,7 +67,7 @@ __global__ void rasterize_layer_kernel(
 
 __global__ void rasterize_reduce_kernel(
     const float3 * tris, const uint * idx, const uint * grid, const int M, const int N,
-    float * outGridDist
+    float * outGridDist, bool * outGridCollide
 ) {
     // idx [M] index into tris
     // tris [?, 3]
@@ -86,6 +86,13 @@ __global__ void rasterize_reduce_kernel(
     const float3 v3 = tris[tofs * 3 + 2];
 
     atomicMin(outGridDist + access, sqrt(point_to_tri_dist_sqr(v1, v2, v3, fxyz)));
+
+    if (ray_triangle_hit_dist(v1, v2, v3, fxyz, make_float3(1, 0, 0)) <= 1 / (float)N)
+        outGridCollide[access * 3] = true;
+    if (ray_triangle_hit_dist(v1, v2, v3, fxyz, make_float3(0, 1, 0)) <= 1 / (float)N)
+        outGridCollide[access * 3 + 1] = true;
+    if (ray_triangle_hit_dist(v1, v2, v3, fxyz, make_float3(0, 0, 1)) <= 1 / (float)N)
+        outGridCollide[access * 3 + 2] = true;
 }
 
 inline uint rasterize_layer_internal(const float3 * tris, const int S, const int M, const int N, uint ** pidx, uint ** pgrid, const float band)
@@ -148,13 +155,13 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
 
     RasterizeResult rasterizeResult;
     CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridDist, R * R * R * sizeof(float)));
-    CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridIdx, R * R * R * sizeof(int)));
+    CHECK_CUDA(cudaMallocManaged(&rasterizeResult.gridCollide, R * R * R * 3 * sizeof(bool)));
     common_fill_kernel<float><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
         1e9f, R * R * R, rasterizeResult.gridDist
     );
     CHECK_CUDA(cudaGetLastError());
-    common_fill_kernel<int><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
-        -1, R * R * R, rasterizeResult.gridIdx
+    common_fill_kernel<bool><<<ceil_div(R * R * R * 3, NTHREAD_1D), NTHREAD_1D>>>(
+        false, R * R * R * 3, rasterizeResult.gridCollide
     );
     CHECK_CUDA(cudaGetLastError());
     CHECK_CUDA(cudaDeviceSynchronize());
@@ -185,7 +192,7 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
         }
 
         rasterize_reduce_kernel<<<ceil_div(M, NTHREAD_1D), NTHREAD_1D>>>(
-            tris, idx, grid, M, R, rasterizeResult.gridDist
+            tris, idx, grid, M, R, rasterizeResult.gridDist, rasterizeResult.gridCollide
         );
         CHECK_CUDA(cudaGetLastError());
         CHECK_CUDA(cudaDeviceSynchronize());

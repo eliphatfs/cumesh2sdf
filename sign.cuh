@@ -4,156 +4,110 @@
 #include "geometry.cuh"
 #include "grid.cuh"
 
-constexpr const int KERNEL_ITER = 8;
-constexpr const int CPU_ITER = 1;
-
-__forceinline__ __device__ bool vertex_relax(const float3 * tris, const RasterizeResult rast, const int3 xyz, char * state, const uint N)
+__forceinline__ __device__ uint shuffler(uint v, uint bmask)
 {
-    const uint access = to_gidx(make_uint3(xyz), N);
-    const float dist = rast.gridDist[access];
-    if (dist < 0.86603f / N) return false;
-    // state[access] is 2.
+    return (v * (v + 1) / 2) & bmask;
+}
 
-    const int3 check[26] = {
-        xyz - make_int3(1, 0, 0),
-        xyz - make_int3(0, 1, 0),
-        xyz - make_int3(0, 0, 1),
+__forceinline__ __device__ uint cts_find(const uint * parents, const uint i)
+{
+    // REVIEW: we shall not use path compression?
+    // Because parallelism is good without atomic writes.
+    uint c = i;
+    while (parents[c] != c)
+        c = parents[c];
+    return c;
+}
 
-        xyz + make_int3(1, 0, 0),
-        xyz + make_int3(0, 1, 0),
-        xyz + make_int3(0, 0, 1),
+__forceinline__ __device__ void cts_atomic_union(uint * __restrict__ parents, uint x, uint y)
+{
+    // REVIEW: I didn't use rank or size based union
+    // Because I cannot implement it without locks
+    // And we can expect xor-shuffled performance to be the same without
+    while (true)
+    {
+        x = cts_find(parents, x);
+        y = cts_find(parents, y);
+        if (x == y)
+            return;
+        atomicCAS(&parents[max(x, y)], max(x, y), min(x, y));
+    }
+}
 
-        xyz + make_int3(1, -1, 0),
-        xyz + make_int3(0, 1, -1),
-        xyz + make_int3(-1, 0, 1),
-        xyz + make_int3(1, 1, 0),
-        xyz + make_int3(0, 1, 1),
-        xyz + make_int3(1, 0, 1),
-        xyz + make_int3(-1, 1, 0),
-        xyz + make_int3(0, -1, 1),
-        xyz + make_int3(1, 0, -1),
-        xyz - make_int3(1, 1, 0),
-        xyz - make_int3(0, 1, 1),
-        xyz - make_int3(1, 0, 1),
+__global__ void volume_cts_kernel(const RasterizeResult rast, uint * parents, const uint N, const int shfBitmask)
+{
+    const uint3 xyz = blockIdx * blockDim + threadIdx;
+    if (xyz.x >= N || xyz.y >= N || xyz.z >= N) return;
+    const uint access = to_gidx(xyz, N);
+    const uint shfm = shuffler(access, shfBitmask);
+    const int dist = rast.gridDist[access];
 
-        xyz + make_int3(-1, -1, -1),
-        xyz + make_int3(-1, -1, 1),
-        xyz + make_int3(-1, 1, -1),
-        xyz + make_int3(-1, 1, 1),
-        xyz + make_int3(1, -1, -1),
-        xyz + make_int3(1, -1, 1),
-        xyz + make_int3(1, 1, -1),
-        xyz + make_int3(1, 1, 1),
-    };
+    if (dist >= 0.86603f / N)
+    {
+        if (xyz.x == 0 || xyz.y == 0 || xyz.z == 0)
+        {
+            const uint shfex = shuffler(N * N * N, shfBitmask);
+            cts_atomic_union(parents, shfm, shfex);
+        }
+    }
 
-    const float3 c0 = (i2f(make_uint3(xyz)) + 0.5f) / (float)N;
-    const int tidx = rast.gridIdx[access];
-    const int tofs = max(tidx, 0) * 3;
-    const float3 v01 = tris[tofs];
-    const float3 v02 = tris[tofs + 1];
-    const float3 v03 = tris[tofs + 2];
-    const float3 p0 = closest_point_on_triangle_to_point(v01, v02, v03, c0);
+    const uint a3 = access * 3;
+    if (!rast.gridCollide[a3])
+    {
+        const uint3 nxyz = clamp(xyz + make_uint3(1, 0, 0), 0, N - 1);
+        const uint shfn = shuffler(to_gidx(nxyz, N), shfBitmask);
+        cts_atomic_union(parents, shfm, shfn);
+    }
+    if (!rast.gridCollide[a3 + 1])
+    {
+        const uint3 nxyz = clamp(xyz + make_uint3(0, 1, 0), 0, N - 1);
+        const uint shfn = shuffler(to_gidx(nxyz, N), shfBitmask);
+        cts_atomic_union(parents, shfm, shfn);
+    }
+    if (!rast.gridCollide[a3 + 2])
+    {
+        const uint3 nxyz = clamp(xyz + make_uint3(0, 0, 1), 0, N - 1);
+        const uint shfn = shuffler(to_gidx(nxyz, N), shfBitmask);
+        cts_atomic_union(parents, shfm, shfn);
+    }
+}
+
+__global__ void volume_apply_sign_kernel(RasterizeResult rast, const uint * parents, const int N, const int shfBitmask)
+{
+    const uint root = cts_find(parents, shuffler(N * N * N, shfBitmask));
     
-    bool changed = false;
-
-    #pragma unroll
-    for (int s = 0; s < 26; s++)
-    {
-        const uint3 z1 = make_uint3(clamp(check[s], 0, N - 1));
-        const uint naccess = to_gidx(z1, N);
-        if (state[naccess] != 0) continue;
-        if (rast.gridDist[naccess] >= 0.86603f / N)
-        {
-            state[naccess] = 2;
-            changed = true;
-        }
-        else
-        {
-            assert(tidx >= 0);
-            const float3 c1 = (i2f(z1) + 0.5f) / (float)N;
-            const int nidx = rast.gridIdx[naccess] * 3;
-            const float3 v11 = tris[nidx];
-            const float3 v12 = tris[nidx + 1];
-            const float3 v13 = tris[nidx + 2];
-            const float3 p1 = closest_point_on_triangle_to_point(v11, v12, v13, c1);
-            
-            if (!(dot(normalize(c0 - p0), normalize(c1 - p1)) > 0))
-                continue;
-            if (!(dot(normalize(c0 - p1), normalize(c1 - p1)) > 0))
-                continue;
-            if (!(dot(normalize(c0 - p0), normalize(c1 - p0)) > 0))
-                continue;
-            state[naccess] = 2;
-            changed = true;
-        }
-    }
-    return changed;
-}
-
-__global__ void volume_bellman_ford_kernel(const float3 * tris, const RasterizeResult rast, char * state, const uint N, bool * globalChanged)
-{
-    bool changed = false;
     const uint3 xyz = blockIdx * blockDim + threadIdx;
     if (xyz.x >= N || xyz.y >= N || xyz.z >= N) return;
     const uint access = to_gidx(xyz, N);
-    if (xyz.x == 0 || xyz.y == 0 || xyz.z == 0 || xyz.x == N - 1 || xyz.y == N - 1 || xyz.z == N - 1)
-    {
-        if (state[access] == 0 && rast.gridDist[access] >= 0.86603f / N)
-        {
-            state[access] = 2;
-            changed = true;
-        }
-    }
-    for (int it = 0; it < KERNEL_ITER; it++)
-    {
-        if (state[access] != 2) continue;
-        changed |= vertex_relax(tris, rast, make_int3(xyz), state, N);
-        state[access] = 1;
-    }
-    changed = __syncthreads_or((int)changed) != 0;
-    if (threadIdx.x == 0 && threadIdx.y == 0 && threadIdx.z == 0 && changed)
-        *globalChanged = true;
-}
+    const uint shfm = shuffler(access, shfBitmask);
 
-__global__ void volume_apply_sign_kernel(RasterizeResult rast, const char * state, const int N)
-{
-    const uint3 xyz = blockIdx * blockDim + threadIdx;
-    if (xyz.x >= N || xyz.y >= N || xyz.z >= N) return;
-    const uint access = to_gidx(xyz, N);
-
-    if (state[access] == 0)
+    if (cts_find(parents, shfm) != root)
         rast.gridDist[access] *= -1;
 }
 
 static void fill_signs(const float3 * tris, const int N, RasterizeResult rast)
 {
-    dim3 dimBlock(ceil_div(N, 16), ceil_div(N, 16), ceil_div(N, 1));
-    dim3 dimGrid(16, 16, 1);
+    dim3 dimBlock(ceil_div(N, TILE_SIZE), ceil_div(N, TILE_SIZE), ceil_div(N, TILE_SIZE));
+    dim3 dimGrid(TILE_SIZE, TILE_SIZE, TILE_SIZE);
+    // cudaFuncSetCacheConfig(volume_bellman_ford_kernel, cudaFuncCachePreferL1);
+    // volume_bellman_ford_kernel<<<dimBlock, dimGrid>>>(tris, rast, nullptr, N);
+    uint * parents;
+    const uint nodeCount = npo2(N * N * N + 1);
+    const uint shfBitmask = npo2(N * N * N + 1) - 1;
+    CHECK_CUDA(cudaMallocManaged(&parents, npo2(N * N * N + 1) * sizeof(uint)));
 
-    char * state;
-    bool * changed;
-    CHECK_CUDA(cudaMallocManaged(&state, N * N * N * sizeof(char)));
-    CHECK_CUDA(cudaMallocManaged(&changed, sizeof(bool)));
-    *changed = true;
+    CHECK_CUDA(cudaFuncSetCacheConfig(volume_cts_kernel, cudaFuncCachePreferL1));
+    CHECK_CUDA(cudaFuncSetCacheConfig(volume_apply_sign_kernel, cudaFuncCachePreferL1));
 
-    CHECK_CUDA(cudaFuncSetCacheConfig(volume_bellman_ford_kernel, cudaFuncCachePreferL1));
-    common_fill_kernel<char><<<ceil_div(N * N * N, NTHREAD_1D), NTHREAD_1D>>>(0, N * N * N, state);
-    CHECK_CUDA(cudaDeviceSynchronize());
+    common_arange_kernel<<<ceil_div(nodeCount, NTHREAD_1D), NTHREAD_1D>>>(parents, nodeCount, 0);
+    CHECK_CUDA(cudaGetLastError());
 
-    while (*changed)
-    {
-        *changed = false;
-        for (int it = 0; it < CPU_ITER; it++)
-        {
-            volume_bellman_ford_kernel<<<dimBlock, dimGrid>>>(tris, rast, state, N, changed);
-            CHECK_CUDA(cudaGetLastError());
-        }
-        CHECK_CUDA(cudaDeviceSynchronize());
-    }
+    volume_cts_kernel<<<dimBlock, dimGrid>>>(rast, parents, N, shfBitmask);
+    CHECK_CUDA(cudaGetLastError());
 
-    CHECK_CUDA(cudaFree(changed));
-    volume_apply_sign_kernel<<<dimBlock, dimGrid>>>(rast, state, N);
+    volume_apply_sign_kernel<<<dimBlock, dimGrid>>>(rast, parents, N, shfBitmask);
+    CHECK_CUDA(cudaGetLastError());
 
     CHECK_CUDA(cudaDeviceSynchronize());
-    CHECK_CUDA(cudaFree(state));
+    CHECK_CUDA(cudaFree(parents));
 }
