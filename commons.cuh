@@ -18,6 +18,14 @@ inline void _cuda_check(cudaError_t code, const char *file, int line)
    }
 }
 
+constexpr const int TILE_SIZE = 8;
+constexpr const int NTHREAD_1D = 512;
+
+constexpr int ceil_div(const int a, const int b)
+{
+    return ((a) + (b) - 1) / (b);
+}
+
 __device__ __forceinline__ static float atomicMin(float* address, float val)
 {
     int* address_as_i = (int*) address;

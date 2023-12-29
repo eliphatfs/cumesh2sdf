@@ -124,3 +124,36 @@ __global__ void volume_apply_sign_kernel(RasterizeResult rast, const char * stat
     if (state[access] == 0)
         rast.gridDist[access] *= -1;
 }
+
+void fill_signs(const float3 * tris, const int N, RasterizeResult rast)
+{
+    dim3 dimBlock(ceil_div(N, 16), ceil_div(N, 16), ceil_div(N, 1));
+    dim3 dimGrid(16, 16, 1);
+
+    char * state;
+    bool * changed;
+    CHECK_CUDA(cudaMallocManaged(&state, N * N * N * sizeof(char)));
+    CHECK_CUDA(cudaMallocManaged(&changed, sizeof(bool)));
+    *changed = true;
+
+    CHECK_CUDA(cudaFuncSetCacheConfig(volume_bellman_ford_kernel, cudaFuncCachePreferL1));
+    common_fill_kernel<char><<<ceil_div(N * N * N, NTHREAD_1D), NTHREAD_1D>>>(0, N * N * N, state);
+    CHECK_CUDA(cudaDeviceSynchronize());
+
+    while (*changed)
+    {
+        *changed = false;
+        for (int it = 0; it < CPU_ITER; it++)
+        {
+            volume_bellman_ford_kernel<<<dimBlock, dimGrid>>>(tris, rast, state, N, changed);
+            CHECK_CUDA(cudaGetLastError());
+        }
+        CHECK_CUDA(cudaDeviceSynchronize());
+    }
+
+    CHECK_CUDA(cudaFree(changed));
+    volume_apply_sign_kernel<<<dimBlock, dimGrid>>>(rast, state, N);
+
+    CHECK_CUDA(cudaDeviceSynchronize());
+    CHECK_CUDA(cudaFree(state));
+}
