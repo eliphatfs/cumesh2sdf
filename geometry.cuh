@@ -1,8 +1,6 @@
 #pragma once
 #include "commons.cuh"
 
-constexpr const float EPS = 1e-10f;
-
 __forceinline__ __device__ float lensqr(float3 v)
 {
     return dot(v, v);
@@ -14,7 +12,7 @@ __forceinline__ __device__ float point_to_segment_dist_sqr(float3 v, float3 w, f
   w -= v;
   p -= v;
   const float l2 = lensqr(w);  // i.e. |w-v|^2 -  avoid a sqrt
-  if (l2 < EPS) return lensqr(p);   // v == w case
+  if (l2 < FLT_EPSILON) return lensqr(p);   // v == w case
   // Consider the line extending the segment, parameterized as v + t (w - v).
   // We find projection of point p onto the line. 
   // It falls where t = [(p-v) . (w-v)] / |w-v|^2
@@ -37,7 +35,7 @@ __forceinline__ __device__ float point_to_tri_dist_sqr(float3 v1, float3 v2, flo
 
     const float3 noru = cross(e0, e1);
     const float scl = length(noru);
-    if (scl < EPS) return min_edge;  // 0-area tri
+    if (scl < FLT_EPSILON) return min_edge;  // 0-area tri
     const float3 nor = noru / scl;
 
     const float3 proj = p - (dot(p, nor) - dot(v1, nor)) * nor;
@@ -51,7 +49,7 @@ __forceinline__ __device__ float point_to_tri_dist_sqr(float3 v1, float3 v2, flo
 
     const float denom = dot00 * dot11 - dot01 * dot01;
     // TODO: denom ~ 0 when cosc ~ 1. do we need another degenerate check?
-    if (denom < EPS) return min_edge;
+    if (denom < FLT_EPSILON) return min_edge;
     const float invDenom = 1.0 / denom;
     const float u = (dot11 * dot02 - dot01 * dot12) * invDenom;
     const float v = (dot00 * dot12 - dot01 * dot02) * invDenom;
@@ -79,9 +77,9 @@ __forceinline__ __device__ float3 closest_point_on_segment_to_point(const float3
     float3 ab = b - a;
     t = dot(p - a, ab);
 
-    if (t <= 0.0) {
+    if (t <= 0.0f) {
         // c projects outside the [a,b] interval, on the a side.
-        t = 0.0;
+        t = 0.0f;
         return a;
     } else {
 
@@ -90,7 +88,7 @@ __forceinline__ __device__ float3 closest_point_on_segment_to_point(const float3
 
         if (t >= denom) {
             // c projects outside the [a,b] interval, on the b side.
-            t = 1.0;
+            t = 1.0f;
             return b;
         } else {
             // c projects inside the [a,b] interval.
@@ -106,7 +104,7 @@ __forceinline__ __device__ float3 closest_point_on_triangle_to_point(
     float uvw[3] = {0, 0, 0};
     // degenerate triangle, singular
     if ((is_approx_equal(a, b) && is_approx_equal(a, c))) {
-        uvw[0] = 1.0;
+        uvw[0] = 1.0f;
         return a;
     }
 
@@ -116,73 +114,73 @@ __forceinline__ __device__ float3 closest_point_on_triangle_to_point(
     // degenerate triangle edges
     if (is_approx_equal(a, b)) {
 
-        float t = 0.0;
+        float t = 0.0f;
         float3 cp = closest_point_on_segment_to_point(a, c, p, t);
 
-        uvw[0] = 1.0 - t;
+        uvw[0] = 1.0f - t;
         uvw[2] = t;
 
         return cp;
 
     } else if (is_approx_equal(a, c) || is_approx_equal(b, c)) {
 
-        float t = 0.0;
+        float t = 0.0f;
         float3 cp = closest_point_on_segment_to_point(a, b, p, t);
-        uvw[0] = 1.0 - t;
+        uvw[0] = 1.0f - t;
         uvw[1] = t;
         return cp;
     }
 
-    if (d1 <= 0.0 && d2 <= 0.0) {
-        uvw[0] = 1.0;
+    if (d1 <= 0.0f && d2 <= 0.0f) {
+        uvw[0] = 1.0f;
         return a; // barycentric coordinates (1,0,0)
     }
 
     // Check if P in vertex region outside B
     float3 bp = p - b;
     float d3 = dot(ab, bp), d4 = dot(ac, bp);
-    if (d3 >= 0.0 && d4 <= d3) {
-        uvw[1] = 1.0;
+    if (d3 >= 0.0f && d4 <= d3) {
+        uvw[1] = 1.0f;
         return b; // barycentric coordinates (0,1,0)
     }
 
     // Check if P in edge region of AB, if so return projection of P onto AB
     float vc = d1 * d4 - d3 * d2;
-    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+    if (vc <= 0.0f && d1 >= 0.0f && d3 <= 0.0f) {
         uvw[1] = d1 / (d1 - d3);
-        uvw[0] = 1.0 - uvw[1];
+        uvw[0] = 1.0f - uvw[1];
         return a + uvw[1] * ab; // barycentric coordinates (1-v,v,0)
     }
 
     // Check if P in vertex region outside C
     float3 cp = p - c;
     float d5 = dot(ab, cp), d6 = dot(ac, cp);
-    if (d6 >= 0.0 && d5 <= d6) {
-        uvw[2] = 1.0;
+    if (d6 >= 0.0f && d5 <= d6) {
+        uvw[2] = 1.0f;
         return c; // barycentric coordinates (0,0,1)
     }
 
     // Check if P in edge region of AC, if so return projection of P onto AC
     float vb = d5 * d2 - d1 * d6;
-    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+    if (vb <= 0.0f && d2 >= 0.0f && d6 <= 0.0f) {
         uvw[2] = d2 / (d2 - d6);
-        uvw[0] = 1.0 - uvw[2];
+        uvw[0] = 1.0f - uvw[2];
         return a + uvw[2] * ac; // barycentric coordinates (1-w,0,w)
     }
 
     // Check if P in edge region of BC, if so return projection of P onto BC
     float va = d3*d6 - d5*d4;
-    if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+    if (va <= 0.0f && (d4 - d3) >= 0.0f && (d5 - d6) >= 0.0f) {
         uvw[2] = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-        uvw[1] = 1.0 - uvw[2];
+        uvw[1] = 1.0f - uvw[2];
         return b + uvw[2] * (c - b); // barycentric coordinates (0,1-w,w)
     }
 
     // P inside face region. Compute Q through its barycentric coordinates (u,v,w)
-    float denom = 1.0 / (va + vb + vc);
+    float denom = 1.0f / (va + vb + vc);
     uvw[2] = vc * denom;
     uvw[1] = vb * denom;
-    uvw[0] = 1.0 - uvw[1] - uvw[2];
+    uvw[0] = 1.0f - uvw[1] - uvw[2];
 
     return a + ab*uvw[1] + ac*uvw[2]; // = u*a + v*b + w*c , u= va*denom = 1.0-v-w
 }

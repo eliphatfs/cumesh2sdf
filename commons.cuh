@@ -45,11 +45,11 @@ __global__ void common_fill_kernel(const T val, const uint L, T * outGrid)
     outGrid[g] = val;
 }
 
-__global__ void common_arange_kernel(uint * t, uint limit)
+__global__ void common_arange_kernel(uint * t, uint limit, uint ofs)
 {
     const uint g = blockIdx.x * blockDim.x + threadIdx.x;
     if (g >= limit) return;
-    t[g] = g;
+    t[g] = g + ofs;
 }
 
 inline uint npo2(const uint n)

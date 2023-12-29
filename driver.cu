@@ -32,11 +32,11 @@ int main(int argc, char ** argv)
     // for (int i = 0; i < buffer.size() / 3 / sizeof(float); i++)
     //     printf("%.2f %.2f %.2f\n", tris[i].x, tris[i].y, tris[i].z);
 
-    constexpr const int N = 128;
+    constexpr const int N = 256;
     RasterizeResult rast = rasterize_tris(tris, F, N, 4.0f / N);
     const auto rasterizePhase = clock.now() - start;
     start = clock.now();
-    fill_signs(tris, N, rast);
+    // fill_signs(tris, N, rast);
     const auto signPhase = clock.now() - start;
     start = clock.now();
     static char _output_buf[2 * 1024 * 1024];
