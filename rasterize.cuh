@@ -198,8 +198,14 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
 
 static RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, const float band, const int B = 131072)
 {
-    if (R <= 64) return rasterize_tris_internal(tris, F, { 8, R / 8 }, B, band);
-    if (R <= 512) return rasterize_tris_internal(tris, F, { 8, 8, R / 64 }, B, band);
-    if (R <= 2048) return rasterize_tris_internal(tris, F, { 8, 8, 4, R / 256 }, B, band);
-    return rasterize_tris_internal(tris, F, { 8, 8, 8, R / 512 }, B, band);
+    assert(R <= 1024);
+    std::vector<int> s;
+    int N = R;
+    while (N > 4)
+    {
+        s.push_back(4);
+        N /= 4;
+    }
+    s.push_back(N);
+    return rasterize_tris_internal(tris, F, s, B, band);
 }

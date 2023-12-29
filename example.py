@@ -19,9 +19,9 @@ tris = (tris / tris.max() + 1 / 16) / (9 / 8)
 
 tris = torch.tensor(tris, dtype=torch.float32, device='cuda:0')
 R = 256
-d = torchcumesh2sdf.get_sdf(tris, R, 4 / R).cpu().numpy()
+d = torchcumesh2sdf.get_sdf(tris, R, 3 / R).cpu().numpy()
 plotlib.ion()
-act = plotlib.imshow(d[:, R // 8, :], vmin=-4 / R, vmax=4 / R)
+act = plotlib.imshow(d[:, R // 8, :], vmin=-3 / R, vmax=3 / R)
 plotlib.colorbar()
 plotlib.waitforbuttonpress()
 for i in range(0, R):
@@ -32,4 +32,4 @@ for i in range(0, R):
     plotlib.waitforbuttonpress()
 
 # print(d)
-mcubes.export_obj(*mcubes.marching_cubes(d, 0), "tmp/test.obj")
+mcubes.export_obj(*mcubes.marching_cubes(d, 0.88 / R), "tmp/test.obj")
