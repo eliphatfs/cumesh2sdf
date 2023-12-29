@@ -1,6 +1,8 @@
 #pragma once
 #include "commons.cuh"
 
+constexpr const float EPS = 1e-10f;
+
 __forceinline__ __device__ float lensqr(float3 v)
 {
     return dot(v, v);
@@ -12,7 +14,7 @@ __forceinline__ __device__ float point_to_segment_dist_sqr(float3 v, float3 w, f
   w -= v;
   p -= v;
   const float l2 = lensqr(w);  // i.e. |w-v|^2 -  avoid a sqrt
-  if (l2 < FLT_EPSILON) return lensqr(p);   // v == w case
+  if (l2 < EPS) return lensqr(p);   // v == w case
   // Consider the line extending the segment, parameterized as v + t (w - v).
   // We find projection of point p onto the line. 
   // It falls where t = [(p-v) . (w-v)] / |w-v|^2
@@ -35,7 +37,7 @@ __forceinline__ __device__ float point_to_tri_dist_sqr(float3 v1, float3 v2, flo
 
     const float3 noru = cross(e0, e1);
     const float scl = length(noru);
-    if (scl < FLT_EPSILON) return min_edge;  // 0-area tri
+    if (scl < EPS) return min_edge;  // 0-area tri
     const float3 nor = noru / scl;
 
     const float3 proj = p - (dot(p, nor) - dot(v1, nor)) * nor;
@@ -49,7 +51,7 @@ __forceinline__ __device__ float point_to_tri_dist_sqr(float3 v1, float3 v2, flo
 
     const float denom = dot00 * dot11 - dot01 * dot01;
     // TODO: denom ~ 0 when cosc ~ 1. do we need another degenerate check?
-    if (denom < FLT_EPSILON) return min_edge;
+    if (denom < EPS) return min_edge;
     const float invDenom = 1.0 / denom;
     const float u = (dot11 * dot02 - dot01 * dot12) * invDenom;
     const float v = (dot00 * dot12 - dot01 * dot02) * invDenom;
