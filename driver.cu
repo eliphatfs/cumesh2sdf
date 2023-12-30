@@ -32,13 +32,15 @@ int main(int argc, char ** argv)
     // for (int i = 0; i < buffer.size() / 3 / sizeof(float); i++)
     //     printf("%.2f %.2f %.2f\n", tris[i].x, tris[i].y, tris[i].z);
 
-    constexpr const int N = 256;
+    constexpr const int N = 128;
     RasterizeResult rast = rasterize_tris(tris, F, N, 3.0f / N);
     const auto rasterizePhase = clock.now() - start;
     start = clock.now();
     fill_signs(tris, N, rast);
     const auto signPhase = clock.now() - start;
     start = clock.now();
+    auto gridDistCPU = std::make_unique<float[]>(N * N * N);
+    CHECK_CUDA(cudaMemcpy(gridDistCPU.get(), rast.gridDist, sizeof(float) * N * N * N, cudaMemcpyDeviceToHost));
     static char _output_buf[2 * 1024 * 1024];
     std::ofstream fo("output.txt", std::fstream::trunc);
     fo.rdbuf()->pubsetbuf(_output_buf, 2 * 1024 * 1024);
@@ -46,7 +48,7 @@ int main(int argc, char ** argv)
         for (int j = 0; j < N; j++)
         {
             for (int k = 0; k < N; k++)
-                fo << rast.gridDist[i * N * N + j * N + k] << '\t';
+                fo << gridDistCPU[i * N * N + j * N + k] << '\t';
             fo << '\n';
         }
     fo.close();

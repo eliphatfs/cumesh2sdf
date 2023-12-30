@@ -123,9 +123,9 @@ static void fill_signs(const float3 * tris, const int N, RasterizeResult rast)
     // cudaFuncSetCacheConfig(volume_bellman_ford_kernel, cudaFuncCachePreferL1);
     // volume_bellman_ford_kernel<<<dimBlock, dimGrid>>>(tris, rast, nullptr, N);
     uint * parents;
-    const uint nodeCount = npo2(N * N * N + 1);
+    const uint nodeCount = (N * N * N + 1);
     const uint shfBitmask = npo2(N * N * N + 1) - 1;
-    CHECK_CUDA(cudaMallocManaged(&parents, npo2(N * N * N + 1) * sizeof(uint)));
+    CHECK_CUDA(cudaMalloc(&parents, (N * N * N + 1) * sizeof(uint)));
 
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_cts_kernel, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_apply_sign_kernel, cudaFuncCachePreferL1));
@@ -144,6 +144,6 @@ static void fill_signs(const float3 * tris, const int N, RasterizeResult rast)
     volume_apply_sign_kernel<<<dimBlock, dimGrid>>>(rast, parents, N, shfBitmask);
     CHECK_CUDA(cudaGetLastError());
 
-    CHECK_CUDA(cudaDeviceSynchronize());
     CHECK_CUDA(cudaFree(parents));
+    CHECK_CUDA(cudaDeviceSynchronize());
 }
