@@ -11,7 +11,8 @@
 template<bool probe>
 __global__ void rasterize_layer_kernel(
     const float3 * tris, const uint * idx, const uint * grid, const uint S, const int M, const int N, const float band,
-    uint * tempBlockOffset, uint * totalSize, uint * outIdx, uint * outGrid
+    uint * __restrict__ tempBlockOffset, uint * __restrict__ totalSize,
+    uint * __restrict__ outIdx, uint * __restrict__ outGrid
 ) {
     // idx [M] index into tris
     // tris [?, 3]
@@ -67,7 +68,7 @@ __global__ void rasterize_layer_kernel(
 
 __global__ void rasterize_reduce_kernel(
     const float3 * tris, const uint * idx, const uint * grid, const int M, const int N,
-    float * outGridDist, bool * outGridCollide
+    float * __restrict__ outGridDist, bool * __restrict__ outGridCollide
 ) {
     // idx [M] index into tris
     // tris [?, 3]
