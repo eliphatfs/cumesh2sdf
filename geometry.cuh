@@ -1,7 +1,7 @@
 #pragma once
 #include "commons.cuh"
 
-constexpr const float EPS = 1e-10f;
+constexpr const float EPS = 1e-11f;
 
 __forceinline__ __device__ float lensqr(float3 v)
 {
@@ -37,7 +37,7 @@ __forceinline__ __device__ float point_to_tri_dist_sqr(float3 v1, float3 v2, flo
 
     const float3 noru = cross(e0, e1);
     const float scl = length(noru);
-    if (scl < EPS) return min_edge;  // 0-area tri
+    if (scl < FLT_EPSILON) return min_edge;  // 0-area tri
     const float3 nor = noru / scl;
 
     const float3 proj = p - (dot(p, nor) - dot(v1, nor)) * nor;
@@ -187,7 +187,9 @@ __forceinline__ __device__ float3 closest_point_on_triangle_to_point(
     return a + ab*uvw[1] + ac*uvw[2]; // = u*a + v*b + w*c , u= va*denom = 1.0-v-w
 }
 
-__forceinline__ __device__ float ray_triangle_hit_dist(float3 v1, float3 v2, float3 v3, float3 ro, float3 rd)
+constexpr const float EPS_PLANE_CLOSE = 1e-5f;
+
+__forceinline__ __device__ float ray_triangle_hit_dist(float3 v1, float3 v2, float3 v3, float3 ro, float3 rd, float pdist)
 {
     v2 -= v1;
     v3 -= v1;
@@ -199,9 +201,14 @@ __forceinline__ __device__ float ray_triangle_hit_dist(float3 v1, float3 v2, flo
     const float3 scr = cross(ro, v2);
     const float v = dot(rd, scr) / det;
     const float t = dot(v3, scr) / det;
-    const bool di = abs(det) > FLT_EPSILON;
-    const bool hit = di && t >= 0 && u >= 0 && v >= 0 && u + v <= 1;
-    const bool planeclose = !di && abs(dot(ro, normalize(cross(v2, v3)))) < 1e-4f;
-    // FIXME: give a good lower bound in parallel case!
-    return hit ? t : planeclose ? sqrt(point_to_tri_dist_sqr(make_float3(0, 0, 0), v2, v3, ro)) : FLT_MAX;
+    const bool di = abs(det) > EPS;
+    const bool hit = di && t >= 0 && u >= -FLT_EPSILON && v >= -FLT_EPSILON && u + v <= 1 + FLT_EPSILON;
+    const bool planeclose = !di && abs(dot(ro, normalize(cross(v2, v3)))) < EPS_PLANE_CLOSE;
+    return hit ? t : planeclose ? pdist : FLT_MAX;
+}
+
+__forceinline__ __device__ float ray_triangle_hit_dist(float3 v1, float3 v2, float3 v3, float3 ro, float3 rd)
+{
+    float pd = sqrt(point_to_tri_dist_sqr(make_float3(0, 0, 0), v2, v3, ro));
+    return ray_triangle_hit_dist(v1, v2, v3, ro, rd, pd);
 }

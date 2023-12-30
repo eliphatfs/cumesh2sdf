@@ -85,13 +85,15 @@ __global__ void rasterize_reduce_kernel(
     const float3 v2 = tris[tofs * 3 + 1];
     const float3 v3 = tris[tofs * 3 + 2];
 
-    atomicMin(outGridDist + access, sqrt(point_to_tri_dist_sqr(v1, v2, v3, fxyz)));
+    const float finalDist = sqrt(point_to_tri_dist_sqr(v1, v2, v3, fxyz));
+    atomicMin(outGridDist + access, finalDist);
 
-    if (ray_triangle_hit_dist(v1, v2, v3, fxyz, make_float3(1, 0, 0)) <= 1 / (float)N)
+    const float rayth = 1.0f / N + FLT_EPSILON;
+    if (ray_triangle_hit_dist(v1, v2, v3, fxyz, make_float3(1, 0, 0), finalDist) <= rayth)
         outGridCollide[access * 3] = true;
-    if (ray_triangle_hit_dist(v1, v2, v3, fxyz, make_float3(0, 1, 0)) <= 1 / (float)N)
+    if (ray_triangle_hit_dist(v1, v2, v3, fxyz, make_float3(0, 1, 0), finalDist) <= rayth)
         outGridCollide[access * 3 + 1] = true;
-    if (ray_triangle_hit_dist(v1, v2, v3, fxyz, make_float3(0, 0, 1)) <= 1 / (float)N)
+    if (ray_triangle_hit_dist(v1, v2, v3, fxyz, make_float3(0, 0, 1), finalDist) <= rayth)
         outGridCollide[access * 3 + 2] = true;
 }
 
