@@ -24,11 +24,23 @@ __forceinline__ __device__ float point_to_segment_dist_sqr(float3 v, float3 w, f
   return lensqr(p - projection);
 }
 
+__forceinline__ __device__ float origin_to_segment_dist_sqr(const float3 v, const float3 w)
+{
+  const float l2 = lensqr(v - w);
+  if (l2 < EPS) return lensqr(v);
+  const float t = clamp(dot(v, v - w) / l2, 0.0f, 1.0f);
+  const float3 projection = lerp(v, w, t);
+  return lensqr(projection);
+}
+
 __forceinline__ __device__ float point_to_tri_dist_sqr(float3 v1, float3 v2, float3 v3, float3 p)
 {
-    const float d1 = point_to_segment_dist_sqr(v1, v2, p);
-    const float d2 = point_to_segment_dist_sqr(v2, v3, p);
-    const float d3 = point_to_segment_dist_sqr(v3, v1, p);
+    v1 -= p;
+    v2 -= p;
+    v3 -= p;
+    const float d1 = origin_to_segment_dist_sqr(v1, v2);
+    const float d2 = origin_to_segment_dist_sqr(v2, v3);
+    const float d3 = origin_to_segment_dist_sqr(v3, v1);
 
     const float min_edge = fminf(fminf(d1, d2), d3);
 
@@ -40,7 +52,7 @@ __forceinline__ __device__ float point_to_tri_dist_sqr(float3 v1, float3 v2, flo
     if (scl < FLT_EPSILON) return min_edge;  // 0-area tri
     const float3 nor = noru / scl;
 
-    const float3 proj = p - (dot(p, nor) - dot(v1, nor)) * nor;
+    const float3 proj = dot(v1, nor) * nor;
     const float3 e2 = proj - v1;
 
     const float dot00 = dot(e0, e0);
@@ -61,7 +73,7 @@ __forceinline__ __device__ float point_to_tri_dist_sqr(float3 v1, float3 v2, flo
     const float3 prc = v1 + uc * e0 + vc * e1;
     // printf("%.3f %.3f; %.3f %.3f %.3f; %.3f %.3f %.3f\n", uc, vc, proj.x, proj.y, proj.z, prc.x, prc.y, prc.z);
     // printf("%.3f %.3f\n", lensqr(p - prc), min_edge);
-    return fminf(lensqr(p - prc), min_edge);
+    return fminf(lensqr(prc), min_edge);
 }
 
 __forceinline__ __device__ bool is_approx_equal(const float a, const float b)
