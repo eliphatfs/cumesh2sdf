@@ -158,12 +158,12 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
 
     RasterizeResult rasterizeResult;
     CHECK_CUDA(cudaMalloc(&rasterizeResult.gridDist, R * R * R * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&rasterizeResult.gridCollide, R * R * R * 3 * sizeof(bool)));
+    CHECK_CUDA(cudaMalloc(&rasterizeResult.gridCollide, R * R * R * sizeof(bool) * 3));
     common_fill_kernel<float><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
         1e9f, R * R * R, rasterizeResult.gridDist
     );
     CHECK_CUDA(cudaGetLastError());
-    common_fill_kernel<bool><<<ceil_div(R * R * R * 3, NTHREAD_1D), NTHREAD_1D>>>(
+    common_fill_kernel<bool><<<ceil_div(R * R * R * 3LL, NTHREAD_1D), NTHREAD_1D>>>(
         false, R * R * R * 3, rasterizeResult.gridCollide
     );
     CHECK_CUDA(cudaGetLastError());
