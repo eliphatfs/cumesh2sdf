@@ -56,9 +56,9 @@ __global__ void rasterize_layer_kernel(
             outGrid[bofs + inblock] = pack_id(nxyz);
         }
     }
-    __syncthreads();
     if constexpr (probe)
     {
+        __syncthreads();
         if (threadIdx.x == 0)
         {
             tempBlockOffset[b] = atomicAdd(totalSize, blockSize);
@@ -90,6 +90,7 @@ __global__ void rasterize_reduce_kernel(
     atomicMin(outGridDist + access, finalDist);
 
     const float rayth = 1.0f / N + FLT_EPSILON;
+    if (finalDist > rayth) return;
     if (ray_triangle_hit_dist(v1, v2, v3, fxyz, make_float3(1, 0, 0), finalDist) <= rayth)
         outGridCollide[access * 3] = true;
     if (ray_triangle_hit_dist(v1, v2, v3, fxyz, make_float3(0, 1, 0), finalDist) <= rayth)
