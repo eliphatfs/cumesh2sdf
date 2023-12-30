@@ -99,17 +99,15 @@ __global__ void rasterize_reduce_kernel(
         outGridCollide[access * 3 + 2] = true;
 }
 
-inline uint rasterize_layer_internal(const float3 * tris, const int S, const int M, const int N, uint ** pidx, uint ** pgrid, const float band)
+inline uint rasterize_layer_internal(const float3 * tris, const int S, const int M, const int N, uint ** pidx, uint ** pgrid, uint * totalSize, const float band)
 {
     uint * idx = *pidx;
     uint * grid = *pgrid;
 
-    uint * totalSize;
     uint * outIdx;
     uint * outGrid;
     uint * tempBlockOffset;
     
-    CHECK_CUDA(cudaMallocManaged(&totalSize, sizeof(uint)));
     if (S * S * S * M != S * S * S * (long long)M)
     {
         std::cerr << "Warning: Overflow in rasterize layer. Please reduce batch size." << std::endl;
@@ -138,7 +136,6 @@ inline uint rasterize_layer_internal(const float3 * tris, const int S, const int
     CHECK_CUDA(cudaFree(idx));
     CHECK_CUDA(cudaFree(grid));
     CHECK_CUDA(cudaFree(tempBlockOffset));
-    CHECK_CUDA(cudaFree(totalSize));
 
     *pidx = outIdx;
     *pgrid = outGrid;
@@ -159,15 +156,9 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
     RasterizeResult rasterizeResult;
     CHECK_CUDA(cudaMalloc(&rasterizeResult.gridDist, R * R * R * sizeof(float)));
     CHECK_CUDA(cudaMalloc(&rasterizeResult.gridCollide, R * R * R * sizeof(bool) * 3));
-    common_fill_kernel<float><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
-        1e9f, R * R * R, rasterizeResult.gridDist
-    );
-    CHECK_CUDA(cudaGetLastError());
-    common_fill_kernel<bool><<<ceil_div(R * R * R * 3LL, NTHREAD_1D), NTHREAD_1D>>>(
-        false, R * R * R * 3, rasterizeResult.gridCollide
-    );
-    CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaDeviceSynchronize());
+
+    uint * totalSize;
+    CHECK_CUDA(cudaMallocManaged(&totalSize, sizeof(uint)));
 
     uint startId = pack_id(make_uint3(0, 0, 0));
     int M;
@@ -186,14 +177,24 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
         CHECK_CUDA(cudaGetLastError());
         common_fill_kernel<uint><<<ceil_div(M, NTHREAD_1D), NTHREAD_1D>>>(startId, M, grid);
         CHECK_CUDA(cudaGetLastError());
-        CHECK_CUDA(cudaDeviceSynchronize());
 
         for (uint i = 0; i < SS.size(); i++)
         {
             N *= SS[i];
-            M = rasterize_layer_internal(tris, SS[i], M, N, &idx, &grid, band);
+            M = rasterize_layer_internal(tris, SS[i], M, N, &idx, &grid, totalSize, band);
         }
 
+        if (j == 0)
+        {
+            common_fill_kernel<float><<<ceil_div(R * R * R, NTHREAD_1D), NTHREAD_1D>>>(
+                1e9f, R * R * R, rasterizeResult.gridDist
+            );
+            CHECK_CUDA(cudaGetLastError());
+            common_fill_kernel<bool><<<ceil_div(R * R * R * 3LL, NTHREAD_1D), NTHREAD_1D>>>(
+                false, R * R * R * 3, rasterizeResult.gridCollide
+            );
+            CHECK_CUDA(cudaGetLastError());
+        }
         rasterize_reduce_kernel<<<ceil_div(M, NTHREAD_1D), NTHREAD_1D>>>(
             tris, idx, grid, M, R, rasterizeResult.gridDist, rasterizeResult.gridCollide
         );
@@ -201,6 +202,7 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
         CHECK_CUDA(cudaFree(idx));
         CHECK_CUDA(cudaFree(grid));
     }
+    CHECK_CUDA(cudaFree(totalSize));
     CHECK_CUDA(cudaDeviceSynchronize());
 
     return rasterizeResult;
