@@ -121,9 +121,9 @@ inline uint rasterize_layer_internal(const float3 * tris, const int S, const int
         tris, idx, grid, S, M, N, band, tempBlockOffset, totalSize, nullptr, nullptr
     );
     CHECK_CUDA(cudaGetLastError());
-    CHECK_CUDA(cudaDeviceSynchronize());
 
-    const uint las = *totalSize;
+    uint las;
+    CHECK_CUDA(cudaMemcpy(&las, totalSize, sizeof(uint), cudaMemcpyDeviceToHost));
     CHECK_CUDA(cudaMalloc(&outIdx, las * sizeof(uint)));
     CHECK_CUDA(cudaMalloc(&outGrid, las * sizeof(uint)));
 
@@ -158,7 +158,7 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
     CHECK_CUDA(cudaMalloc(&rasterizeResult.gridCollide, R * R * R * sizeof(bool) * 3));
 
     uint * totalSize;
-    CHECK_CUDA(cudaMallocManaged(&totalSize, sizeof(uint)));
+    CHECK_CUDA(cudaMalloc(&totalSize, sizeof(uint)));
 
     uint startId = pack_id(make_uint3(0, 0, 0));
     int M;
