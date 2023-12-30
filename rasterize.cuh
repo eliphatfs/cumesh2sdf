@@ -41,9 +41,9 @@ __global__ void rasterize_layer_kernel(
 
     const uint gid = grid[t];
     const uint3 nxyz = unpack_id(gid) * S + make_uint3(i, j, k);
-    const float3 fxyz = (make_float3(nxyz.x, nxyz.y, nxyz.z) + 0.5f) / (float)N;
+    const float3 fxyz = (i2f(nxyz) + 0.5f) / (float)N;
     
-    const float thresh = 0.87 / N + band;
+    const float thresh = 0.87f / N + band;
     const bool intersect = point_to_tri_dist_sqr(v1, v2, v3, fxyz) < thresh * thresh;
     
     if (intersect)
