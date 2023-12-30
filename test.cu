@@ -41,7 +41,7 @@ __global__ void test_point_to_tri_data_kernel(
 
 void test_point_to_tri_data()
 {
-    std::ifstream fi("tript.txt");
+    std::ifstream fi("tmp/disttri2pt/tript.txt");
     int F;
     fi >> F;
     float3 * pts;
@@ -57,7 +57,7 @@ void test_point_to_tri_data()
             fi >> tris[i * 3 + j].x >> tris[i * 3 + j].y >> tris[i * 3 + j].z;
     test_point_to_tri_data_kernel<<<F / 256 + 1, 256>>>(tris, pts, F, outDist);
     cudaDeviceSynchronize();
-    std::ofstream fo("bug/dist.txt", std::fstream::trunc);
+    std::ofstream fo("tmp/disttri2pt/dist.txt", std::fstream::trunc);
     for (int i = 0; i < F; i++)
         fo << outDist[i] << '\n';
     cudaFree(pts);
