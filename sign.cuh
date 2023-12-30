@@ -6,7 +6,8 @@
 
 __forceinline__ __device__ uint shuffler(uint v, uint bmask)
 {
-    return (v * (v + 1) / 2) & bmask;
+    // return (v * (v + 1) / 2) & bmask;
+    return v;  // trade off algorithmic complexity for memory coalesce
 }
 
 __forceinline__ __device__ uint cts_find(const uint * parents, const uint i)
@@ -34,9 +35,38 @@ __forceinline__ __device__ void cts_atomic_union(uint * __restrict__ parents, ui
     }
 }
 
+__global__ void volume_sign_prescan_kernel(const RasterizeResult rast, uint * parents, const uint N, const int shfBitmask)
+{
+    const uint3 xy = blockIdx * blockDim + threadIdx;
+    if (xy.x >= N || xy.y >= N) return;
+    int flags = 0;
+    const uint shfex = shuffler(N * N * N, shfBitmask);
+    for (uint i = 0; i < N; i++)
+    {
+        const uint3 xyzs[4] = {
+            make_uint3(i, xy.y, xy.x),
+            make_uint3(N - 1 - i, xy.y, xy.x),
+            make_uint3(xy.y, i, xy.x),
+            make_uint3(xy.y, N - 1 - i, xy.x)
+        };
+        #pragma unroll
+        for (uint j = 0; j < 4; j++)
+        {
+            const uint access = to_gidx(xyzs[j], N);
+            if (rast.gridDist[access] < 0.87f / N)
+                flags |= 1 << j;
+            if (flags & (1 << j))
+                continue;
+            const uint shfm = shuffler(access, shfBitmask);
+            parents[shfm] = shfex;
+        }
+    }
+}
+
 __global__ void volume_cts_kernel(const RasterizeResult rast, uint * parents, const uint N, const int shfBitmask)
 {
-    const uint3 xyz = blockIdx * blockDim + threadIdx;
+    const uint3 tid = blockIdx * blockDim + threadIdx;
+    const uint3 xyz = make_uint3(tid.z, tid.y, tid.x);
     if (xyz.x >= N || xyz.y >= N || xyz.z >= N) return;
     const uint access = to_gidx(xyz, N);
     const uint shfm = shuffler(access, shfBitmask);
@@ -76,7 +106,8 @@ __global__ void volume_apply_sign_kernel(RasterizeResult rast, const uint * pare
 {
     const uint root = cts_find(parents, shuffler(N * N * N, shfBitmask));
     
-    const uint3 xyz = blockIdx * blockDim + threadIdx;
+    const uint3 tid = blockIdx * blockDim + threadIdx;
+    const uint3 xyz = make_uint3(tid.z, tid.y, tid.x);
     if (xyz.x >= N || xyz.y >= N || xyz.z >= N) return;
     const uint access = to_gidx(xyz, N);
     const uint shfm = shuffler(access, shfBitmask);
@@ -98,10 +129,15 @@ static void fill_signs(const float3 * tris, const int N, RasterizeResult rast)
 
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_cts_kernel, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_apply_sign_kernel, cudaFuncCachePreferL1));
+    CHECK_CUDA(cudaFuncSetCacheConfig(volume_sign_prescan_kernel, cudaFuncCachePreferL1));
 
     common_arange_kernel<<<ceil_div(nodeCount, NTHREAD_1D), NTHREAD_1D>>>(parents, nodeCount, 0);
     CHECK_CUDA(cudaGetLastError());
 
+    dim3 dimBlock2d(ceil_div(N, 16), ceil_div(N, 16), 1);
+    dim3 dimGrid2d(16, 16, 1);
+    volume_sign_prescan_kernel<<<dimBlock2d, dimGrid2d>>>(rast, parents, N, shfBitmask);
+    CHECK_CUDA(cudaGetLastError());
     volume_cts_kernel<<<dimBlock, dimGrid>>>(rast, parents, N, shfBitmask);
     CHECK_CUDA(cudaGetLastError());
 
