@@ -1,3 +1,4 @@
+import time
 import numpy
 import torch
 import mcubes
@@ -5,31 +6,39 @@ import trimesh
 import torchcumesh2sdf
 import matplotlib.pyplot as plotlib
 
-import torch
-from torch.profiler import profile, record_function, ProfilerActivity
 
-# mesh = trimesh.load("tmp/spot.obj")
-mesh = trimesh.load(r"C:\Users\eliphat\Downloads\37730.stl")
-tris = numpy.array(mesh.triangles, dtype=numpy.float32, subok=False)
-# tris[..., [1, 2]] = tris[..., [2, 1]]
-x = -tris.min(0).min(1)
-tris = tris - tris.min(0).min(1)
-x = (x / tris.max() + 1 / 16) / (9 / 8)
-tris = (tris / tris.max() + 1 / 16) / (9 / 8)
+R = 512
+band = 3 / R
 
-tris = torch.tensor(tris, dtype=torch.float32, device='cuda:0')
-R = 256
-d = torchcumesh2sdf.get_sdf(tris, R, 3 / R).cpu().numpy()
+
+def load_and_preprocess(p):
+    mesh = trimesh.load(p)
+    tris = numpy.array(mesh.triangles, dtype=numpy.float32, subok=False)
+    # tris[..., [1, 2]] = tris[..., [2, 1]]
+    tris = tris - tris.min(0).min(1)
+    tris = (tris / tris.max() + band) / (1 + band * 2)
+    return torch.tensor(tris, dtype=torch.float32, device='cuda:0')
+
+
+s = [load_and_preprocess("tmp/Octocat-v2.obj")] * 10
+for tris in s:
+    start = time.perf_counter()
+    d = torchcumesh2sdf.get_sdf(tris, R, band)
+    torch.cuda.synchronize()
+    print("%.3f ms" % ((time.perf_counter() - start) * 1000))
+
+d = d.cpu().numpy()
+
+# visualize
 plotlib.ion()
-act = plotlib.imshow(d[:, R // 8, :], vmin=-3 / R, vmax=3 / R)
+act = plotlib.imshow(d[:, 0, :], vmin=-3 / R, vmax=3 / R)
 plotlib.colorbar()
-plotlib.waitforbuttonpress()
 for i in range(0, R):
     if (d[:, i, :] > 1e8).all():
         continue
     act.set_data(d[:, i, :])
-    # plotlib.pause(0.08)
-    plotlib.waitforbuttonpress()
+    plotlib.pause(0.01)
+    # plotlib.waitforbuttonpress()
 
-# print(d)
-mcubes.export_obj(*mcubes.marching_cubes(d, 0.88 / R), "tmp/test.obj")
+# run marching cubes to reconstruct
+mcubes.export_obj(*mcubes.marching_cubes(d, 0 * 0.87 / R), "tmp/test.obj")
