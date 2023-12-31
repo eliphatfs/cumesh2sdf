@@ -1,5 +1,8 @@
+#include <torch/extension.h>
 #include "torchcumesh2sdf.h"
 #include "main.cuh"
+
+bool registeredExitHooks = false;
 
 at::Tensor get_sdf(const at::Tensor tris, const int R, const float band, const int B)
 {
@@ -11,6 +14,11 @@ at::Tensor get_sdf(const at::Tensor tris, const int R, const float band, const i
     CHECK_CUDA(cudaGetDevice(&device));
     auto options = torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA, device);
     at::Tensor result = torch::from_blob(rast.gridDist, { R, R, R }, options).clone();
+    if (!registeredExitHooks)
+    {
+        registeredExitHooks = true;
+        py::module_::import("atexit").attr("register")(py::module_::import("torchcumesh2sdf").attr("free_cached_memory"));
+    }
     return result;
 }
 
