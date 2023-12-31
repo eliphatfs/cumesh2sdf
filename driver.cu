@@ -19,13 +19,15 @@ int main(int argc, char ** argv)
     int F;
     fi >> F;
     // copies all data into buffer
+    auto trisCPU = std::make_unique<float3[]>(F * 3);
     float3 * tris;
-    cudaMallocManaged(&tris, F * 3 * sizeof(float3));
+    cudaMalloc(&tris, F * 3 * sizeof(float3));
 
     for (int i = 0; i < F; i++)
         for (int j = 0; j < 3; j++)
-            fi >> tris[3 * i + j].x >> tris[3 * i + j].y >> tris[3 * i + j].z;
+            fi >> trisCPU[3 * i + j].x >> trisCPU[3 * i + j].y >> trisCPU[3 * i + j].z;
     fi.close();
+    CHECK_CUDA(cudaMemcpy(tris, trisCPU.get(), sizeof(float3) * F * 3, cudaMemcpyHostToDevice));
     const auto inputPhase = clock.now() - start;
     start = clock.now();
 
