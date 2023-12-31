@@ -210,6 +210,11 @@ static RasterizeResult rasterize_tris(const float3 * tris, const int F, const in
     assert(R <= 1024);
     std::vector<int> s;
     int N = R;
+    if (N > 8)
+    {
+        s.push_back(8);
+        N /= 8;
+    }
     while (N > 4)
     {
         s.push_back(4);
