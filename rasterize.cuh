@@ -3,6 +3,7 @@
 #include "commons.cuh"
 #include "geometry.cuh"
 #include "grid.cuh"
+#include "allocator.cuh"
 #include <utility>
 #include <vector>
 #include <iostream>
@@ -99,21 +100,17 @@ __global__ void rasterize_reduce_kernel(
         outGridCollide[access * 3 + 2] = true;
 }
 
-inline uint rasterize_layer_internal(const float3 * tris, const int S, const int M, const int N, uint ** pidx, uint ** pgrid, uint * totalSize, const float band)
+inline uint rasterize_layer_internal(const float3 * tris, const int S, const int M, const int N, uint ** pidx, uint ** pgrid, uint * totalSize, const float band, MemoryAllocator& ma)
 {
     uint * idx = *pidx;
     uint * grid = *pgrid;
-
-    uint * outIdx;
-    uint * outGrid;
-    uint * tempBlockOffset;
     
     if (S * S * S * M != S * S * S * (long long)M)
     {
         std::cerr << "Warning: Overflow in rasterize layer. Please reduce batch size." << std::endl;
     }
     uint blocks = ceil_div(S * S * S * M, NTHREAD_1D);
-    CHECK_CUDA(cudaMalloc(&tempBlockOffset, blocks * sizeof(uint)));
+    uint * tempBlockOffset = ma.alloc<uint>(blocks);
 
     // probe
     common_fill_kernel<uint><<<1, 1>>>(0, 1, totalSize);
@@ -124,8 +121,9 @@ inline uint rasterize_layer_internal(const float3 * tris, const int S, const int
 
     uint las;
     CHECK_CUDA(cudaMemcpy(&las, totalSize, sizeof(uint), cudaMemcpyDeviceToHost));
-    CHECK_CUDA(cudaMalloc(&outIdx, las * sizeof(uint)));
-    CHECK_CUDA(cudaMalloc(&outGrid, las * sizeof(uint)));
+
+    uint * outIdx = ma.alloc<uint>(las);
+    uint * outGrid = ma.alloc<uint>(las);
 
     // fill
     rasterize_layer_kernel<false><<<blocks, NTHREAD_1D>>>(
@@ -133,9 +131,9 @@ inline uint rasterize_layer_internal(const float3 * tris, const int S, const int
     );
     CHECK_CUDA(cudaGetLastError());
 
-    CHECK_CUDA(cudaFree(idx));
-    CHECK_CUDA(cudaFree(grid));
-    CHECK_CUDA(cudaFree(tempBlockOffset));
+    ma.free(idx);
+    ma.free(grid);
+    ma.free(tempBlockOffset);
 
     *pidx = outIdx;
     *pgrid = outGrid;
@@ -160,6 +158,8 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
     uint * totalSize;
     CHECK_CUDA(cudaMalloc(&totalSize, sizeof(uint)));
 
+    MemoryAllocator ma;
+
     uint startId = pack_id(make_uint3(0, 0, 0));
     int M;
     for (int j = 0; j < F; j += B)
@@ -167,11 +167,8 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
         N = 1;
         M = min(B, F - j);
 
-        uint * idx;
-        uint * grid;
-
-        CHECK_CUDA(cudaMalloc(&idx, M * sizeof(uint)));
-        CHECK_CUDA(cudaMalloc(&grid, M * sizeof(uint)));
+        uint * idx = ma.alloc<uint>(M);
+        uint * grid = ma.alloc<uint>(M);
         
         common_arange_kernel<<<ceil_div(M, NTHREAD_1D), NTHREAD_1D>>>(idx, M, j);
         CHECK_CUDA(cudaGetLastError());
@@ -181,7 +178,7 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
         for (uint i = 0; i < SS.size(); i++)
         {
             N *= SS[i];
-            M = rasterize_layer_internal(tris, SS[i], M, N, &idx, &grid, totalSize, band);
+            M = rasterize_layer_internal(tris, SS[i], M, N, &idx, &grid, totalSize, band, ma);
         }
 
         if (j == 0)
@@ -199,8 +196,8 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
             tris, idx, grid, M, R, rasterizeResult.gridDist, rasterizeResult.gridCollide
         );
         CHECK_CUDA(cudaGetLastError());
-        CHECK_CUDA(cudaFree(idx));
-        CHECK_CUDA(cudaFree(grid));
+        ma.free(idx);
+        ma.free(grid);
     }
     CHECK_CUDA(cudaFree(totalSize));
     CHECK_CUDA(cudaDeviceSynchronize());
