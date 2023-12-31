@@ -35,10 +35,10 @@ int main(int argc, char ** argv)
     //     printf("%.2f %.2f %.2f\n", tris[i].x, tris[i].y, tris[i].z);
 
     constexpr const int N = 128;
-    RasterizeResult rast = rasterize_tris(tris, F, N, 3.0f / N);
+    RasterizeResult rast = rasterize_tris(tris, F, N, 3.0f / N, 65536, false);
     const auto rasterizePhase = clock.now() - start;
     start = clock.now();
-    fill_signs(tris, N, rast);
+    fill_signs(tris, N, rast, false);
     const auto signPhase = clock.now() - start;
     start = clock.now();
     auto gridDistCPU = std::make_unique<float[]>(N * N * N);
