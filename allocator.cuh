@@ -3,51 +3,77 @@
 #include <vector>
 #include <map>
 
-constexpr const size_t MAP_SIZE = 32 * 1024 * 1024;
-constexpr const size_t MAX_FREE = 2;
-
 class MemoryAllocator {
     std::map<void*, int> sizesAlloc;
     std::map<void*, int> sizesFree;
+    size_t mapSize, maxFree;
 public:
+    MemoryAllocator(size_t map_size, size_t max_free)
+    {
+        mapSize = map_size;
+        maxFree = max_free;
+    }
     template<typename T>
     T * alloc(const size_t num)
     {
         size_t sz = num * sizeof(T);
-        // for (const auto& p : sizesFree)
-        // {
-        //     if (p.second >= sz)
-        //     {
-        //         sizesAlloc[p.first] = p.second;
-        //         sizesFree.erase(p.first);
-        //         return (T*)p.first;
-        //     }
-        // }
-        // sz = ceil_div(sz, MAP_SIZE) * MAP_SIZE;
+        void* block = find_free_block(sz);
+        if (block)
+        {
+            sizesAlloc[block] = sizesFree[block];
+            sizesFree.erase(block);
+            // printf("HIT %p %d\n", block, sz);
+            return (T*)block;
+        }
+        sz = ceil_div(sz, mapSize) * mapSize;
         T * ptr;
         CHECK_CUDA(cudaMalloc(&ptr, sz));
-        // sizesAlloc[ptr] = sz;
+        // printf("SHORT %p %d\n", ptr, sz);
+        sizesAlloc[ptr] = sz;
         return ptr;
+    }
+
+    void* find_free_block(size_t sz)
+    {
+        size_t minsize = PTRDIFF_MAX;
+        void* got = nullptr;
+        for (const auto& p : sizesFree)
+        {
+            if (p.second <= minsize && p.second >= sz)
+            {
+                got = p.first;
+                minsize = p.second;
+            }
+        }
+        return got;
     }
 
     void free(void* ptr)
     {
-        CHECK_CUDA(cudaFree(ptr));
-        // assert(sizesAlloc.count(ptr));
-        // sizesFree[ptr] = sizesAlloc[ptr];
-        // sizesAlloc.erase(ptr);
-        // while (sizesFree.size() > MAX_FREE)
-        // {
-        //     CHECK_CUDA(cudaFree(sizesFree.begin()->first));
-        //     sizesFree.erase(sizesFree.begin());
-        // }
+        assert(sizesAlloc.count(ptr));
+        sizesFree[ptr] = sizesAlloc[ptr];
+        sizesAlloc.erase(ptr);
+        // printf("FREE %p %d\n", ptr, sizesFree[ptr]);
+        while (sizesFree.size() > maxFree)
+        {
+            void* tofree = find_free_block(0);
+            assert(tofree != nullptr);
+            CHECK_CUDA(cudaFree(tofree));
+            // printf("RELEASE %p %d\n", tofree, sizesFree[tofree]);
+            sizesFree.erase(tofree);
+        }
     }
 
-    virtual ~MemoryAllocator()
+    void clear()
     {
         for (const auto& p : sizesAlloc)
             CHECK_CUDA(cudaFree(p.first));
         for (const auto& p : sizesFree)
             CHECK_CUDA(cudaFree(p.first));
+    }
+
+    virtual ~MemoryAllocator()
+    {
+        clear();
     }
 };
