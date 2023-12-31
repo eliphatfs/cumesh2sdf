@@ -34,6 +34,12 @@ __forceinline__ __device__ float origin_to_segment_dist_sqr(const float3 v, cons
   return lensqr(projection);
 }
 
+__forceinline__ __device__ float point_to_plane_dist(float3 v1, float3 v2, float3 v3, float3 p)
+{
+    const float3 nor = normalize(cross(v2 - v1, v3 - v1));
+    return abs(dot(nor, p - v1));
+}
+
 __forceinline__ __device__ float point_to_tri_dist_sqr(float3 v1, float3 v2, float3 v3, float3 p)
 {
     v1 -= p;
