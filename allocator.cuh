@@ -70,6 +70,8 @@ public:
             CHECK_CUDA(cudaFree(p.first));
         for (const auto& p : sizesFree)
             CHECK_CUDA(cudaFree(p.first));
+        sizesAlloc.clear();
+        sizesFree.clear();
     }
 
     virtual ~MemoryAllocator()
