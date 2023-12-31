@@ -183,6 +183,8 @@ inline void clear_raster_alloc_cache()
 
 inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F, const std::vector<int> SS, const int B, const float band, const bool useCachedAllocator = false)
 {
+    CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<true, 2>, cudaFuncCachePreferL1));
+    CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<false, 2>, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<true, 4>, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<false, 4>, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<true, 8>, cudaFuncCachePreferL1));
