@@ -47,24 +47,39 @@ __global__ void volume_sign_prescan_kernel(
 ) {
     const uint3 xy = blockIdx * blockDim + threadIdx;
     if (xy.x >= N || xy.y >= N) return;
+    bool skip = false;
     bool flag = false;
     uint shfcn = shuffler(0, shfBitmask);
     if (xy.x == 0 && xy.y == 0)
         parents[shfcn] = shfcn;
-    for (uint i = 0; i < N / 2; i++)
+    for (uint i = 0; i < N; i++)
     {
-        const uint3 xyz = make_uint3(threadIdx.z == 0 ? i : N / 2 + i, xy.y, xy.x);
+        const uint3 xyz = make_uint3(i, xy.y, xy.x);
         const uint access = to_gidx(xyz, N);
         const uint shfm = shuffler(access + 1, shfBitmask);
-        if (rast.gridDist[access] < 0.87f / N)
+        if (skip)
         {
-            flag = true;
-            shfcn = shfm;
+            skip = false;
+            if (flag)
+            {
+                flag = false;
+                shfcn = shfm;
+            }
         }
-        else if (flag)
+        else
         {
-            flag = false;
-            shfcn = shfm;
+            const float dist = rast.gridDist[access] * N;
+            if (dist < 0.87f)
+            {
+                flag = true;
+                shfcn = shfm;
+            }
+            else if (flag)
+            {
+                flag = false;
+                shfcn = shfm;
+            }
+            skip = dist > 2.0f;
         }
         parents[shfm] = shfcn;
     }
@@ -80,11 +95,11 @@ __global__ void volume_cts_kernel(
     if (xyz.x >= N || xyz.y >= N || xyz.z >= N) return;
     const uint access = to_gidx(xyz, N);
     const uint shfm = shuffler(access + 1, shfBitmask);
-    const int dist = rast.gridDist[access];
 
-    if (dist >= 0.86603f / N)
+    if (xyz.x == 0 || xyz.y == 0 || xyz.z == 0)
     {
-        if (xyz.x == 0 || xyz.y == 0 || xyz.z == 0)
+        const int dist = rast.gridDist[access];
+        if (dist >= 0.86603f / N)
         {
             const uint shfex = shuffler(0, shfBitmask);
             cts_atomic_union(parents, shfm, shfex);
@@ -148,7 +163,7 @@ static void fill_signs(const float3 * tris, const int N, RasterizeResult rast, c
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_sign_prescan_kernel, cudaFuncCachePreferL1));
 
     dim3 dimBlock2d(ceil_div(N, 32), ceil_div(N, 8), 1);
-    dim3 dimGrid2d(32, 8, 2);
+    dim3 dimGrid2d(32, 8, 1);
     volume_sign_prescan_kernel<<<dimBlock2d, dimGrid2d>>>(rast, parents, N, shfBitmask);
     CHECK_CUDA(cudaGetLastError());
     dim3 dimBlock(ceil_div(N, 32), ceil_div(N, 16), ceil_div(N, 1));
