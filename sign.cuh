@@ -156,7 +156,8 @@ static void fill_signs(const float3 * tris, const int N, RasterizeResult rast, c
     const uint nodeCount = (N * N * N + 1);
     const uint shfBitmask = npo2(N * N * N + 1) - 1;
 
-    uint * parents = ma.alloc<uint>(nodeCount);
+    uint * block = ma.alloc<uint>(nodeCount + 1024);
+    uint * parents = block + 1023;
 
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_cts_kernel, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_apply_sign_kernel, cudaFuncCachePreferL1));
@@ -174,6 +175,6 @@ static void fill_signs(const float3 * tris, const int N, RasterizeResult rast, c
     volume_apply_sign_kernel<<<dimBlock, dimGrid>>>(rast, parents, N, shfBitmask);
     CHECK_CUDA(cudaGetLastError());
 
-    ma.free(parents);
+    ma.free(block);
     CHECK_CUDA(cudaDeviceSynchronize());
 }
