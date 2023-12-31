@@ -1,5 +1,6 @@
 #pragma once
 #include <cuda.h>
+#include "commons.cuh"
 
 struct RasterizeResult
 {
@@ -8,7 +9,7 @@ struct RasterizeResult
 
     void free()
     {
-        cudaFree(gridDist);
-        cudaFree(gridCollide);
+        CHECK_CUDA(cudaFree(gridDist));
+        CHECK_CUDA(cudaFree(gridCollide));
     }
 };
