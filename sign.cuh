@@ -27,13 +27,16 @@ __forceinline__ __device__ void cts_atomic_union(uint * __restrict__ parents, ui
     // And we can expect xor-shuffled performance to be the same without
     // Experiment:
     // Using path halving during find here cause overall performance to drop.
+    if (x == y) return;
     while (true)
     {
-        if (x == y) return;
-        if (parents[x] == x && parents[y] == y)
+        uint px = parents[x];
+        uint py = parents[y];
+        if (px == y || x == py || px == py) return;
+        if (px == x && py == y)
             atomicCAS(&parents[max(x, y)], max(x, y), min(x, y));
-        x = parents[x];
-        y = parents[y];
+        x = px;
+        y = py;
     }
 }
 
@@ -76,7 +79,7 @@ __global__ void volume_cts_kernel(
     const uint N, const int shfBitmask
 ) {
     const uint3 tid = blockIdx * blockDim + threadIdx;
-    const uint3 xyz = make_uint3(tid.z, tid.y, tid.x);
+    const uint3 xyz = make_uint3(tid.y, tid.z, tid.x);
     if (xyz.x >= N || xyz.y >= N || xyz.z >= N) return;
     const uint access = to_gidx(xyz, N);
     const uint shfm = shuffler(access + 1, shfBitmask);
@@ -135,10 +138,6 @@ inline void clear_sign_alloc_cache()
 
 static void fill_signs(const float3 * tris, const int N, RasterizeResult rast, const bool useCachedAllocator)
 {
-    dim3 dimBlock(ceil_div(N, 32), ceil_div(N, 16), ceil_div(N, 1));
-    dim3 dimGrid(32, 16, 1);
-    // cudaFuncSetCacheConfig(volume_bellman_ford_kernel, cudaFuncCachePreferL1);
-    // volume_bellman_ford_kernel<<<dimBlock, dimGrid>>>(tris, rast, nullptr, N);
     MemoryAllocator theAllocator(2 * 1024 * 1024, 1);
     MemoryAllocator& ma = useCachedAllocator ? cachedAllocatorSign : theAllocator;
 
@@ -151,10 +150,12 @@ static void fill_signs(const float3 * tris, const int N, RasterizeResult rast, c
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_apply_sign_kernel, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_sign_prescan_kernel, cudaFuncCachePreferL1));
 
-    dim3 dimBlock2d(ceil_div(N, 32), ceil_div(N, 16), 1);
-    dim3 dimGrid2d(32, 16, 1);
+    dim3 dimBlock2d(ceil_div(N, 128), ceil_div(N, 4), 1);
+    dim3 dimGrid2d(128, 4, 1);
     volume_sign_prescan_kernel<<<dimBlock2d, dimGrid2d>>>(rast, parents, N, shfBitmask);
     CHECK_CUDA(cudaGetLastError());
+    dim3 dimBlock(ceil_div(N, 32), ceil_div(N, 16), ceil_div(N, 1));
+    dim3 dimGrid(32, 16, 1);
     volume_cts_kernel<<<dimBlock, dimGrid>>>(rast, parents, N, shfBitmask);
     CHECK_CUDA(cudaGetLastError());
 
