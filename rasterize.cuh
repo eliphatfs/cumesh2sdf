@@ -13,7 +13,7 @@ template<bool probe, uint S>
 __global__ void rasterize_layer_kernel(
     const float3 * tris, const uint * idx, const uint * grid, const int M, const int N, const float band,
     uint * __restrict__ tempBlockOffset, uint * __restrict__ totalSize,
-    uint * __restrict__ outIdx, uint * __restrict__ outGrid
+    uint * __restrict__ outIdx, uint * __restrict__ outGrid, const uint preloc
 ) {
     // idx [M] index into tris
     // tris [?, 3]
@@ -48,23 +48,25 @@ __global__ void rasterize_layer_kernel(
     const float thresh = 0.87f / N + band;
     const bool intersect = point_to_tri_dist_sqr(v1, v2, v3, fxyz) < thresh * thresh;
     
+    uint inblock;
     if (intersect)
+        inblock = atomicAdd(&blockSize, 1);
+    
+    __syncthreads();
+    __shared__ uint bofs;
+    if (threadIdx.x == 0)
     {
-        uint inblock = atomicAdd(&blockSize, 1);
-        if constexpr (!probe)
-        {
-            const uint bofs = tempBlockOffset[b];
-            outIdx[bofs + inblock] = tofs;
-            outGrid[bofs + inblock] = pack_id(nxyz);
-        }
+        if constexpr (probe)
+            bofs = tempBlockOffset[b] = atomicAdd(totalSize, blockSize);
+        else
+            bofs = tempBlockOffset[b];
     }
-    if constexpr (probe)
+    __syncthreads();
+
+    if (intersect && bofs + inblock < preloc)
     {
-        __syncthreads();
-        if (threadIdx.x == 0)
-        {
-            tempBlockOffset[b] = atomicAdd(totalSize, blockSize);
-        }
+        outIdx[bofs + inblock] = tofs;
+        outGrid[bofs + inblock] = pack_id(nxyz);
     }
 }
 
@@ -130,24 +132,33 @@ inline uint rasterize_layer_internal(const float3 * tris, const int S, const int
     uint blocks = ceil_div(S * S * S * M, NTHREAD_1D);
     uint * tempBlockOffset = ma.alloc<uint>(blocks);
 
-    // probe
+    uint * outIdx = ma.alloc<uint>(S * 2 * M);
+    uint * outGrid = ma.alloc<uint>(S * 2 * M);
+    uint preloc = min(ma.probe<uint>(outIdx), ma.probe<uint>(outGrid));
+
+    // probe & prefill
     common_fill_kernel<uint><<<1, 1>>>(0, 1, totalSize);
     rasterize_layer_kernel_dispatch<true>(S)<<<blocks, NTHREAD_1D>>>(
-        tris, idx, grid, M, N, band, tempBlockOffset, totalSize, nullptr, nullptr
+        tris, idx, grid, M, N, band, tempBlockOffset, totalSize, outIdx, outGrid, preloc
     );
     CHECK_CUDA(cudaGetLastError());
 
     uint las;
     CHECK_CUDA(cudaMemcpy(&las, totalSize, sizeof(uint), cudaMemcpyDeviceToHost));
 
-    uint * outIdx = ma.alloc<uint>(las);
-    uint * outGrid = ma.alloc<uint>(las);
-
-    // fill
-    rasterize_layer_kernel_dispatch<false>(S)<<<blocks, NTHREAD_1D>>>(
-        tris, idx, grid, M, N, band, tempBlockOffset, nullptr, outIdx, outGrid
-    );
-    CHECK_CUDA(cudaGetLastError());
+    if (las > preloc)
+    {
+        ma.free(outIdx);
+        ma.free(outGrid);
+        ma.release_smallest();
+        outIdx = ma.alloc<uint>(las);
+        outGrid = ma.alloc<uint>(las);
+        // reloc & fill
+        rasterize_layer_kernel_dispatch<false>(S)<<<blocks, NTHREAD_1D>>>(
+            tris, idx, grid, M, N, band, tempBlockOffset, nullptr, outIdx, outGrid, las
+        );
+        CHECK_CUDA(cudaGetLastError());
+    }
 
     ma.free(idx);
     ma.free(grid);
@@ -188,7 +199,7 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
         rasterizeResult = cachedAllocation;
     else
     {
-        CHECK_CUDA(cudaMalloc(&rasterizeResult.gridDist, R * R * R * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&rasterizeResult.gridDist, R * R * R * sizeof(float) + sizeof(uint)));
         CHECK_CUDA(cudaMalloc(&rasterizeResult.gridCollide, R * R * R * sizeof(bool) * 3));
         if (useCachedAllocator)
         {
@@ -201,7 +212,7 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
     MemoryAllocator theAllocator(2 * 1024 * 1024, 0);
     MemoryAllocator& ma = useCachedAllocator ? cachedAllocator : theAllocator;
 
-    uint * totalSize = ma.alloc<uint>(1);
+    uint * totalSize = (uint*)(rasterizeResult.gridDist + (R * R * R));
 
     uint startId = pack_id(make_uint3(0, 0, 0));
     int M;
@@ -243,7 +254,6 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
         ma.free(idx);
         ma.free(grid);
     }
-    ma.free(totalSize);
     CHECK_CUDA(cudaDeviceSynchronize());
 
     return rasterizeResult;
