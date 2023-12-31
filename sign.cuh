@@ -120,16 +120,26 @@ __global__ void volume_apply_sign_kernel(RasterizeResult rast, const uint * pare
         rast.gridDist[access] *= -1;
 }
 
-static void fill_signs(const float3 * tris, const int N, RasterizeResult rast)
+static MemoryAllocator cachedAllocatorSign(2 * 1024 * 1024, 1);
+
+inline void clear_sign_alloc_cache()
+{
+    cachedAllocatorSign.clear();
+}
+
+static void fill_signs(const float3 * tris, const int N, RasterizeResult rast, const bool useCachedAllocator)
 {
     dim3 dimBlock(ceil_div(N, TILE_SIZE), ceil_div(N, TILE_SIZE), ceil_div(N, TILE_SIZE));
     dim3 dimGrid(TILE_SIZE, TILE_SIZE, TILE_SIZE);
     // cudaFuncSetCacheConfig(volume_bellman_ford_kernel, cudaFuncCachePreferL1);
     // volume_bellman_ford_kernel<<<dimBlock, dimGrid>>>(tris, rast, nullptr, N);
-    uint * parents;
+    MemoryAllocator theAllocator(2 * 1024 * 1024, 1);
+    MemoryAllocator& ma = useCachedAllocator ? cachedAllocatorSign : theAllocator;
+
     const uint nodeCount = (N * N * N + 1);
     const uint shfBitmask = npo2(N * N * N + 1) - 1;
-    CHECK_CUDA(cudaMalloc(&parents, (N * N * N + 1) * sizeof(uint)));
+
+    uint * parents = ma.alloc<uint>(nodeCount);
 
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_cts_kernel, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(volume_apply_sign_kernel, cudaFuncCachePreferL1));
@@ -148,6 +158,6 @@ static void fill_signs(const float3 * tris, const int N, RasterizeResult rast)
     volume_apply_sign_kernel<<<dimBlock, dimGrid>>>(rast, parents, N, shfBitmask);
     CHECK_CUDA(cudaGetLastError());
 
-    CHECK_CUDA(cudaFree(parents));
+    ma.free(parents);
     CHECK_CUDA(cudaDeviceSynchronize());
 }

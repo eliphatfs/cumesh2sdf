@@ -140,7 +140,19 @@ inline uint rasterize_layer_internal(const float3 * tris, const int S, const int
     return las;
 }
 
-inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F, const std::vector<int> SS, const int B, const float band)
+static RasterizeResult cachedAllocation;
+static int cachedSize = 0;
+static MemoryAllocator cachedAllocator(4 * 1024 * 1024, 8);
+
+inline void clear_raster_alloc_cache()
+{
+    if (cachedSize <= 0) return;
+    cachedAllocation.free();
+    cachedAllocator.clear();
+    cachedSize = 0;
+}
+
+inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F, const std::vector<int> SS, const int B, const float band, const bool useCachedAllocator = false)
 {
     CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<true>, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<false>, cudaFuncCachePreferL1));
@@ -152,13 +164,24 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
     const int R = N;
 
     RasterizeResult rasterizeResult;
-    CHECK_CUDA(cudaMalloc(&rasterizeResult.gridDist, R * R * R * sizeof(float)));
-    CHECK_CUDA(cudaMalloc(&rasterizeResult.gridCollide, R * R * R * sizeof(bool) * 3));
+    if (useCachedAllocator && cachedSize >= R)
+        rasterizeResult = cachedAllocation;
+    else
+    {
+        CHECK_CUDA(cudaMalloc(&rasterizeResult.gridDist, R * R * R * sizeof(float)));
+        CHECK_CUDA(cudaMalloc(&rasterizeResult.gridCollide, R * R * R * sizeof(bool) * 3));
+        if (useCachedAllocator)
+        {
+            clear_raster_alloc_cache();
+            cachedAllocation = rasterizeResult;
+            cachedSize = R;
+        }
+    }
 
-    uint * totalSize;
-    CHECK_CUDA(cudaMalloc(&totalSize, sizeof(uint)));
+    MemoryAllocator theAllocator(2 * 1024 * 1024, 0);
+    MemoryAllocator& ma = useCachedAllocator ? cachedAllocator : theAllocator;
 
-    MemoryAllocator ma;
+    uint * totalSize = ma.alloc<uint>(1);
 
     uint startId = pack_id(make_uint3(0, 0, 0));
     int M;
@@ -199,13 +222,13 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
         ma.free(idx);
         ma.free(grid);
     }
-    CHECK_CUDA(cudaFree(totalSize));
+    ma.free(totalSize);
     CHECK_CUDA(cudaDeviceSynchronize());
 
     return rasterizeResult;
 }
 
-static RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, const float band, const int B = 131072)
+static RasterizeResult rasterize_tris(const float3 * tris, const int F, const int R, const float band, const int B, const bool useCachedAllocator)
 {
     assert(R <= 1024);
     std::vector<int> s;
@@ -221,5 +244,5 @@ static RasterizeResult rasterize_tris(const float3 * tris, const int F, const in
         N /= 4;
     }
     s.push_back(N);
-    return rasterize_tris_internal(tris, F, s, B, band);
+    return rasterize_tris_internal(tris, F, s, B, band, useCachedAllocator);
 }
