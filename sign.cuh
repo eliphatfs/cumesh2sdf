@@ -42,27 +42,25 @@ __global__ void volume_sign_prescan_kernel(
 ) {
     const uint3 xy = blockIdx * blockDim + threadIdx;
     if (xy.x >= N || xy.y >= N) return;
-    int flags = 0;
-    const uint shfex = shuffler(N * N * N, shfBitmask);
+    bool flag = false;
+    uint shfcn = shuffler(N * N * N, shfBitmask);
     for (uint i = 0; i < N; i++)
     {
-        const uint3 xyzs[4] = {
-            make_uint3(i, xy.y, xy.x),
-            make_uint3(N - 1 - i, xy.y, xy.x),
-            make_uint3(xy.y, i, xy.x),
-            make_uint3(xy.y, N - 1 - i, xy.x)
-        };
-        #pragma unroll
-        for (uint j = 0; j < 4; j++)
+        const uint3 xyz = make_uint3(i, xy.y, xy.x);
+        const uint access = to_gidx(xyz, N);
+        if (rast.gridDist[access] < 0.87f / N)
         {
-            const uint access = to_gidx(xyzs[j], N);
-            if (rast.gridDist[access] < 0.87f / N)
-                flags |= 1 << j;
-            if (flags & (1 << j))
-                continue;
-            const uint shfm = shuffler(access, shfBitmask);
-            parents[shfm] = shfex;
+            flag = true;
+            continue;
         }
+        if (flag)
+        {
+            flag = false;
+            shfcn = shuffler(access, shfBitmask);
+            continue;
+        }
+        const uint shfm = shuffler(access, shfBitmask);
+        parents[shfm] = shfcn;
     }
 }
 
