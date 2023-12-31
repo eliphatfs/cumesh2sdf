@@ -29,11 +29,11 @@ __forceinline__ __device__ void cts_atomic_union(uint * __restrict__ parents, ui
     // Using path halving during find here cause overall performance to drop.
     while (true)
     {
-        x = cts_find(parents, x);
-        y = cts_find(parents, y);
-        if (x == y)
-            return;
-        atomicCAS(&parents[max(x, y)], max(x, y), min(x, y));
+        if (x == y) return;
+        if (parents[x] == x && parents[y] == y)
+            atomicCAS(&parents[max(x, y)], max(x, y), min(x, y));
+        x = parents[x];
+        y = parents[y];
     }
 }
 
@@ -135,8 +135,8 @@ inline void clear_sign_alloc_cache()
 
 static void fill_signs(const float3 * tris, const int N, RasterizeResult rast, const bool useCachedAllocator)
 {
-    dim3 dimBlock(ceil_div(N, TILE_SIZE), ceil_div(N, TILE_SIZE), ceil_div(N, TILE_SIZE));
-    dim3 dimGrid(TILE_SIZE, TILE_SIZE, TILE_SIZE);
+    dim3 dimBlock(ceil_div(N, 32), ceil_div(N, 16), ceil_div(N, 1));
+    dim3 dimGrid(32, 16, 1);
     // cudaFuncSetCacheConfig(volume_bellman_ford_kernel, cudaFuncCachePreferL1);
     // volume_bellman_ford_kernel<<<dimBlock, dimGrid>>>(tris, rast, nullptr, N);
     MemoryAllocator theAllocator(2 * 1024 * 1024, 1);

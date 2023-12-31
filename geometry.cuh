@@ -1,7 +1,8 @@
 #pragma once
 #include "commons.cuh"
 
-constexpr const float EPS = 1e-11f;
+constexpr const float EPS = 1e-12f;
+
 
 __forceinline__ __device__ float lensqr(float3 v)
 {
@@ -48,11 +49,10 @@ __forceinline__ __device__ float point_to_tri_dist_sqr(float3 v1, float3 v2, flo
     const float3 e1 = v3 - v1;
 
     const float3 noru = cross(e0, e1);
-    const float scl = length(noru);
-    if (scl < FLT_EPSILON) return min_edge;  // 0-area tri
-    const float3 nor = noru / scl;
+    const float scl = lensqr(noru);
+    if (scl < EPS) return min_edge;  // 0-area tri
 
-    const float3 proj = dot(v1, nor) * nor;
+    const float3 proj = dot(v1, noru) / scl * noru;
     const float3 e2 = proj - v1;
 
     const float dot00 = dot(e0, e0);

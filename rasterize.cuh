@@ -4,14 +4,14 @@
 #include "geometry.cuh"
 #include "grid.cuh"
 #include "allocator.cuh"
-#include <utility>
 #include <vector>
+#include <string>
+#include <utility>
 #include <iostream>
 
-
-template<bool probe>
+template<bool probe, uint S>
 __global__ void rasterize_layer_kernel(
-    const float3 * tris, const uint * idx, const uint * grid, const uint S, const int M, const int N, const float band,
+    const float3 * tris, const uint * idx, const uint * grid, const int M, const int N, const float band,
     uint * __restrict__ tempBlockOffset, uint * __restrict__ totalSize,
     uint * __restrict__ outIdx, uint * __restrict__ outGrid
 ) {
@@ -29,11 +29,12 @@ __global__ void rasterize_layer_kernel(
     if (threadIdx.x == 0) blockSize = 0;
     __syncthreads();
 
-    const int mo = g % (S * S * S);
-    const int i = mo % S;
-    const int j = (mo / S) % S;
-    const int k = (mo / (S * S)) % S;
     const int t = g / (S * S * S);
+    const int mo = g - t * (S * S * S);
+    const int k = mo / (S * S);
+    const int yo = mo - k * (S * S);
+    const int j = yo / S;
+    const int i = yo - j * S;
 
     const uint tofs = idx[t];
     const float3 v1 = tris[tofs * 3];
@@ -64,6 +65,23 @@ __global__ void rasterize_layer_kernel(
         {
             tempBlockOffset[b] = atomicAdd(totalSize, blockSize);
         }
+    }
+}
+
+template<bool probe>
+auto rasterize_layer_kernel_dispatch(const uint S)
+{
+    switch (S)
+    {
+        case 1: return rasterize_layer_kernel<probe, 1>;
+        case 2: return rasterize_layer_kernel<probe, 2>;
+        case 3: return rasterize_layer_kernel<probe, 3>;
+        case 4: return rasterize_layer_kernel<probe, 4>;
+        case 5: return rasterize_layer_kernel<probe, 5>;
+        case 6: return rasterize_layer_kernel<probe, 6>;
+        case 7: return rasterize_layer_kernel<probe, 7>;
+        case 8: return rasterize_layer_kernel<probe, 8>;
+        default: throw std::runtime_error("Rasterize subdivison dispatch failed with S = " + std::to_string(S));
     }
 }
 
@@ -114,8 +132,8 @@ inline uint rasterize_layer_internal(const float3 * tris, const int S, const int
 
     // probe
     common_fill_kernel<uint><<<1, 1>>>(0, 1, totalSize);
-    rasterize_layer_kernel<true><<<blocks, NTHREAD_1D>>>(
-        tris, idx, grid, S, M, N, band, tempBlockOffset, totalSize, nullptr, nullptr
+    rasterize_layer_kernel_dispatch<true>(S)<<<blocks, NTHREAD_1D>>>(
+        tris, idx, grid, M, N, band, tempBlockOffset, totalSize, nullptr, nullptr
     );
     CHECK_CUDA(cudaGetLastError());
 
@@ -126,8 +144,8 @@ inline uint rasterize_layer_internal(const float3 * tris, const int S, const int
     uint * outGrid = ma.alloc<uint>(las);
 
     // fill
-    rasterize_layer_kernel<false><<<blocks, NTHREAD_1D>>>(
-        tris, idx, grid, S, M, N, band, tempBlockOffset, nullptr, outIdx, outGrid
+    rasterize_layer_kernel_dispatch<false>(S)<<<blocks, NTHREAD_1D>>>(
+        tris, idx, grid, M, N, band, tempBlockOffset, nullptr, outIdx, outGrid
     );
     CHECK_CUDA(cudaGetLastError());
 
@@ -154,8 +172,10 @@ inline void clear_raster_alloc_cache()
 
 inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F, const std::vector<int> SS, const int B, const float band, const bool useCachedAllocator = false)
 {
-    CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<true>, cudaFuncCachePreferL1));
-    CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<false>, cudaFuncCachePreferL1));
+    CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<true, 4>, cudaFuncCachePreferL1));
+    CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<false, 4>, cudaFuncCachePreferL1));
+    CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<true, 8>, cudaFuncCachePreferL1));
+    CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_layer_kernel<false, 8>, cudaFuncCachePreferL1));
     CHECK_CUDA(cudaFuncSetCacheConfig(rasterize_reduce_kernel, cudaFuncCachePreferL1));
 
     int N = 1;
@@ -210,8 +230,9 @@ inline RasterizeResult rasterize_tris_internal(const float3 * tris, const int F,
                 1e9f, R * R * R, rasterizeResult.gridDist
             );
             CHECK_CUDA(cudaGetLastError());
-            common_fill_kernel<bool><<<ceil_div(R * R * R * 3LL, NTHREAD_1D), NTHREAD_1D>>>(
-                false, R * R * R * 3, rasterizeResult.gridCollide
+            assert(R % 2 == 0);
+            common_fill_kernel<int><<<ceil_div(R * R * R / 4 * 3LL, NTHREAD_1D), NTHREAD_1D>>>(
+                0, R * R * R / 4 * 3, (int*)rasterizeResult.gridCollide
             );
             CHECK_CUDA(cudaGetLastError());
         }
