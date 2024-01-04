@@ -15,7 +15,7 @@ def load_and_preprocess(p):
     mesh = trimesh.load(p)
     tris = numpy.array(mesh.triangles, dtype=numpy.float32, subok=False)
     # tris[..., [1, 2]] = tris[..., [2, 1]]
-    tris = tris - tris.min(0).min(1)
+    tris = tris - tris.min(0).min(0)
     tris = (tris / tris.max() + band) / (1 + band * 2)
     return torch.tensor(tris, dtype=torch.float32, device='cuda:0')
 
