@@ -1,4 +1,5 @@
 import time
+import diso
 import numpy
 import torch
 import mcubes
@@ -7,8 +8,8 @@ import torchcumesh2sdf
 import matplotlib.pyplot as plotlib
 
 
-R = 512
-band = 3 / R
+R = 256
+band = 1 / R
 
 
 def load_and_preprocess(p):
@@ -20,14 +21,21 @@ def load_and_preprocess(p):
     return torch.tensor(tris, dtype=torch.float32, device='cuda:0')
 
 
-s = [load_and_preprocess("tmp/Octocat-v2.obj")] * 10
+s = [load_and_preprocess(r"untitled.glb")] * 1
 for tris in s:
-    start = time.perf_counter()
-    d = torchcumesh2sdf.get_sdf(tris, R, band)
-    torch.cuda.synchronize()
-    print("%.3f ms" % ((time.perf_counter() - start) * 1000))
+    for i in range(100):
+        start = time.perf_counter()
+        d = torchcumesh2sdf.get_udf(tris, R, band)
+        print("%.3f ms" % ((time.perf_counter() - start) * 1000))
 
+v, t = diso.DiffMC().cuda().forward(d)
 d = d.cpu().numpy()
+cc = torchcumesh2sdf.get_collide(tris, R, band)
+numpy.savez_compressed("test.npz", sdf=d.astype(numpy.float16), rays=cc.cpu().numpy())
+# print((d < 1e8).sum())
+# breakpoint()
+# d = numpy.load("test.npz")['sdf'].astype(numpy.float32)
+
 
 # visualize
 plotlib.ion()
@@ -36,9 +44,10 @@ plotlib.colorbar()
 for i in range(0, R):
     if (d[:, i, :] > 1e8).all():
         continue
+    print(i)
     act.set_data(d[:, i, :])
-    plotlib.pause(0.01)
-    # plotlib.waitforbuttonpress()
+    # plotlib.pause(0.01)
+    plotlib.waitforbuttonpress()
 
 # run marching cubes to reconstruct
-mcubes.export_obj(*mcubes.marching_cubes(d, 0 * 0.87 / R), "tmp/test.obj")
+mcubes.export_obj(v.cpu().numpy(), t.cpu().numpy(), "tmp/test.obj")
