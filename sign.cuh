@@ -139,6 +139,12 @@ __global__ void volume_apply_sign_kernel(RasterizeResult rast, const uint * pare
 
     if (cts_find(parents, shfm) != root)
         rast.gridDist[access] *= -1;
+
+    if(rast.gridDist[access]>0){
+        const uint a3 = access * 3;
+        if(rast.gridCollide[a3] || rast.gridCollide[a3 + 1] || rast.gridCollide[a3 + 2])
+        rast.gridDist[access] *= -1;
+    }
 }
 
 static MemoryAllocator cachedAllocatorSign(2 * 1024 * 1024, 1);
